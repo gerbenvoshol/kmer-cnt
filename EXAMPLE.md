@@ -89,23 +89,45 @@ chr1	152308305	rs2184953	T	C	48	2	50	0.0400
 
 ## Step 4: Compute Sample Correlation Matrix
 
-Compare all samples to identify relationships:
+Compare all samples to identify relationships. **Use different modes for different scenarios:**
 
+### For Matched Samples (Same Individual, Technical Replicates)
 ```bash
-./correlation-matrix -o correlation.corr -t \
+./correlation-matrix -M matched -o correlation.corr -t \
+    sample1.vaf sample2_replicate.vaf
+```
+Uses **stricter** thresholds: depth ≥5, minimum 10 SNPs (higher quality requirement)
+
+### For Unmatched/Related Samples
+```bash
+./correlation-matrix -M unmatched -o correlation.corr -t \
     sample1.vaf sample2.vaf sample3.vaf
+```
+Uses **lenient** thresholds: depth ≥1, minimum 20 SNPs (more SNPs needed for confidence)
+
+### For High-Confidence Analysis
+```bash
+./correlation-matrix -M strict -o correlation.corr \
+    sample1.vaf sample2.vaf
+```
+Uses **strictest** thresholds: depth ≥10, minimum 30 SNPs
+
+### Custom Configuration
+```bash
+./correlation-matrix -d 3 -m 15 -o correlation.corr sample1.vaf sample2.vaf
 ```
 
 Options:
-- `-o correlation.corr`: Output correlation matrix file
+- `-M MODE`: Preset mode (`matched`, `unmatched`, or `strict`)
+- `-d INT`: Minimum depth per SNP (overrides mode preset)
+- `-m INT`: Minimum SNPs with sufficient depth (overrides mode preset)
+- `-o FILE`: Output correlation matrix file
 - `-t`: Generate dendrogram/tree file (optional)
-- `-m INT`: Minimum SNPs with depth ≥1 required for correlation (default: 20)
 
-**Important:** The correlation calculation is **depth-aware**:
-- Only SNPs with depth ≥1 in both samples are included
-- Requires minimum 20 valid SNPs by default (like NGSCheckMate)
-- Returns 0.0 correlation if insufficient SNPs have adequate depth
-- Prevents spurious correlations from low-coverage samples
+**Important:** Different scenarios require **different depth cutoffs**:
+- **Matched samples**: Higher depth cutoff ensures confident matching (avoids false negatives)
+- **Unmatched samples**: Lower depth cutoff but more SNPs for statistical confidence
+- The mode presets follow NGSCheckMate's approach to depth-dependent correlation
 
 Output example (`correlation.corr`):
 ```

@@ -90,8 +90,8 @@ int load_vaf_file(const char *fn, sample_t *sample, snp_info_t *snps, int *n_snp
 }
 
 // Calculate depth-aware Pearson correlation coefficient
-// Only include SNPs with sufficient depth (>=1) in both samples
-double pearson_correlation_depth_aware(double *x, int *depth_x, double *y, int *depth_y, int n, int min_snps)
+// Only include SNPs with sufficient depth in both samples
+double pearson_correlation_depth_aware(double *x, int *depth_x, double *y, int *depth_y, int n, int min_snps, int min_depth)
 {
 	int i, valid_count = 0;
 	double sum_x = 0, sum_y = 0, sum_xy = 0;
@@ -100,7 +100,7 @@ double pearson_correlation_depth_aware(double *x, int *depth_x, double *y, int *
 	
 	// First pass: count valid SNPs with sufficient depth
 	for (i = 0; i < n; ++i) {
-		if (depth_x[i] >= 1 && depth_y[i] >= 1) {
+		if (depth_x[i] >= min_depth && depth_y[i] >= min_depth) {
 			valid_count++;
 		}
 	}
@@ -110,7 +110,7 @@ double pearson_correlation_depth_aware(double *x, int *depth_x, double *y, int *
 	
 	// Calculate means using only valid SNPs
 	for (i = 0; i < n; ++i) {
-		if (depth_x[i] >= 1 && depth_y[i] >= 1) {
+		if (depth_x[i] >= min_depth && depth_y[i] >= min_depth) {
 			sum_x += x[i];
 			sum_y += y[i];
 		}
@@ -120,7 +120,7 @@ double pearson_correlation_depth_aware(double *x, int *depth_x, double *y, int *
 	
 	// Calculate correlation using only valid SNPs
 	for (i = 0; i < n; ++i) {
-		if (depth_x[i] >= 1 && depth_y[i] >= 1) {
+		if (depth_x[i] >= min_depth && depth_y[i] >= min_depth) {
 			double dx = x[i] - mean_x;
 			double dy = y[i] - mean_y;
 			sum_xy += dx * dy;
@@ -142,7 +142,7 @@ double pearson_correlation_depth_aware(double *x, int *depth_x, double *y, int *
 }
 
 // Calculate distance matrix using depth-aware Pearson correlation
-void calculate_correlation_matrix(sample_t *samples, int n_samples, double **corr_matrix, int min_snps)
+void calculate_correlation_matrix(sample_t *samples, int n_samples, double **corr_matrix, int min_snps, int min_depth)
 {
 	int i, j;
 	
@@ -152,7 +152,7 @@ void calculate_correlation_matrix(sample_t *samples, int n_samples, double **cor
 			double r = pearson_correlation_depth_aware(
 				samples[i].vaf, samples[i].depth,
 				samples[j].vaf, samples[j].depth,
-				samples[i].n_snps, min_snps);
+				samples[i].n_snps, min_snps, min_depth);
 			corr_matrix[i][j] = r;
 			corr_matrix[j][i] = r; // symmetric
 		}
@@ -256,7 +256,10 @@ int main(int argc, char *argv[])
 	int c, i, j;
 	char *out_fn = 0;
 	int build_tree_flag = 0;
-	int min_snps = 20;  // Minimum SNPs required for correlation (like NGSCheckMate)
+	char *mode = NULL;
+	int min_snps = 20;   // Minimum SNPs required for correlation (like NGSCheckMate)
+	int min_depth = 1;   // Minimum depth per SNP (configurable for matched vs unmatched)
+	int custom_min_snps = 0, custom_min_depth = 0;
 	sample_t *samples;
 	snp_info_t *snps;
 	int n_samples, n_snps = 0;
@@ -264,20 +267,53 @@ int main(int argc, char *argv[])
 	FILE *out_fp, *tree_fp = NULL;
 	ketopt_t o = KETOPT_INIT;
 	
-	while ((c = ketopt(&o, argc, argv, 1, "o:tm:", 0)) >= 0) {
+	while ((c = ketopt(&o, argc, argv, 1, "o:tm:d:M:", 0)) >= 0) {
 		if (c == 'o') out_fn = o.arg;
 		else if (c == 't') build_tree_flag = 1;
-		else if (c == 'm') min_snps = atoi(o.arg);
+		else if (c == 'm') { min_snps = atoi(o.arg); custom_min_snps = 1; }
+		else if (c == 'd') { min_depth = atoi(o.arg); custom_min_depth = 1; }
+		else if (c == 'M') mode = o.arg;
+	}
+	
+	// Apply preset modes if specified (unless overridden by -m/-d)
+	if (mode) {
+		if (strcmp(mode, "matched") == 0) {
+			// Matched samples (same individual, replicates): stricter thresholds
+			if (!custom_min_depth) min_depth = 5;   // Require higher depth
+			if (!custom_min_snps) min_snps = 10;    // Can use fewer SNPs if high quality
+			fprintf(stderr, "[M::%s] Using 'matched' mode: min_depth=%d, min_snps=%d\n", 
+			        __func__, min_depth, min_snps);
+		} else if (strcmp(mode, "unmatched") == 0 || strcmp(mode, "default") == 0) {
+			// Unmatched/related samples: more lenient depth, more SNPs needed
+			if (!custom_min_depth) min_depth = 1;   // Accept lower depth
+			if (!custom_min_snps) min_snps = 20;    // Need more SNPs for confidence
+			fprintf(stderr, "[M::%s] Using 'unmatched' mode: min_depth=%d, min_snps=%d\n", 
+			        __func__, min_depth, min_snps);
+		} else if (strcmp(mode, "strict") == 0) {
+			// Strict mode: high confidence correlations only
+			if (!custom_min_depth) min_depth = 10;  // High depth required
+			if (!custom_min_snps) min_snps = 30;    // Many SNPs required
+			fprintf(stderr, "[M::%s] Using 'strict' mode: min_depth=%d, min_snps=%d\n", 
+			        __func__, min_depth, min_snps);
+		} else {
+			fprintf(stderr, "Error: unknown mode '%s'. Valid modes: matched, unmatched, strict\n", mode);
+			return 1;
+		}
 	}
 	
 	n_samples = argc - o.ind;
 	
 	if (!out_fn || n_samples < 2) {
-		fprintf(stderr, "Usage: correlation-matrix -o <output.corr> [-t] [-m INT] <sample1.vaf> <sample2.vaf> [sample3.vaf ...]\n");
+		fprintf(stderr, "Usage: correlation-matrix -o <output.corr> [-t] [-M MODE] [-m INT] [-d INT] <sample1.vaf> <sample2.vaf> [sample3.vaf ...]\n");
 		fprintf(stderr, "Options:\n");
-		fprintf(stderr, "  -o FILE   output correlation matrix file\n");
-		fprintf(stderr, "  -t        build tree/dendrogram (outputs to <output.tree>)\n");
-		fprintf(stderr, "  -m INT    minimum SNPs with depth >= 1 required for correlation [%d]\n", min_snps);
+		fprintf(stderr, "  -o FILE    output correlation matrix file\n");
+		fprintf(stderr, "  -t         build tree/dendrogram (outputs to <output.tree>)\n");
+		fprintf(stderr, "  -M MODE    preset mode: 'matched' (same individual, depth≥5, SNPs≥10),\n");
+		fprintf(stderr, "                          'unmatched' (related/unrelated, depth≥1, SNPs≥20),\n");
+		fprintf(stderr, "                          'strict' (high confidence, depth≥10, SNPs≥30)\n");
+		fprintf(stderr, "  -m INT     minimum SNPs with sufficient depth required [%d]\n", min_snps);
+		fprintf(stderr, "  -d INT     minimum depth per SNP [%d]\n", min_depth);
+		fprintf(stderr, "\nNote: -m and -d override preset mode values\n");
 		return 1;
 	}
 	
@@ -314,7 +350,7 @@ int main(int argc, char *argv[])
 		}
 	}
 	
-	calculate_correlation_matrix(samples, n_samples, corr_matrix, min_snps);
+	calculate_correlation_matrix(samples, n_samples, corr_matrix, min_snps, min_depth);
 	
 	// Write correlation matrix
 	fprintf(stderr, "[M::%s] Writing correlation matrix...\n", __func__);

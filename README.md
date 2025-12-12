@@ -48,19 +48,31 @@ chr19	4945904	4945905	rs2250981	C	T
 #### 3. Compute correlation matrix
 
 ```sh
-./correlation-matrix -o correlation.corr -t sample1.vaf sample2.vaf sample3.vaf
+# Using preset mode for matched samples (same individual)
+./correlation-matrix -M matched -o correlation.corr -t sample1.vaf sample2.vaf
+
+# Using preset mode for unmatched/related samples
+./correlation-matrix -M unmatched -o correlation.corr -t sample1.vaf sample2.vaf sample3.vaf
+
+# Manual configuration
+./correlation-matrix -d 5 -m 15 -o correlation.corr sample1.vaf sample2.vaf
 ```
 
 **Input:**
 - Multiple VAF files from step 2
+- `-M MODE` Preset modes: `matched` (depth≥5, SNPs≥10), `unmatched` (depth≥1, SNPs≥20), `strict` (depth≥10, SNPs≥30)
 - `-t` Optional flag to generate dendrogram/tree
-- `-m` Minimum SNPs with depth ≥1 required for correlation (default: 20)
+- `-d INT` Minimum depth per SNP (default: 1)
+- `-m INT` Minimum SNPs with sufficient depth required (default: 20)
 
 **Output:** 
 - Correlation matrix file (depth-aware Pearson correlation)
 - Optional tree file (UPGMA clustering)
 
-**Note:** The correlation calculation is depth-aware - only SNPs with depth ≥1 in both samples are included, and a minimum of 20 valid SNPs (by default) is required to compute correlation. This prevents misleading correlations from low-coverage samples.
+**Note:** The correlation calculation is depth-aware with different thresholds for different scenarios:
+- **Matched samples** (same individual, replicates): Use higher depth cutoff (≥5) for confident matches
+- **Unmatched samples** (related/unrelated): Use lower depth cutoff (≥1) but require more SNPs (≥20)
+- Manual `-m` and `-d` flags override preset modes
 
 ### Quick Start
 
