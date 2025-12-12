@@ -1,4 +1,0 @@
-# Simple dendrogram (UPGMA-like clustering)
-# Format: (Sample1:distance, Sample2:distance)
-Cluster: sample2 (0.0000) <-> sample3 (0.0000)
-Cluster: sample1 (0.5000) <-> sample2 (0.5000)

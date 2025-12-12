@@ -1,4 +1,87 @@
-## Getting Started
+## SNP K-mer Analysis Tools
+
+This repository includes three new C programs for SNP-based sample correlation analysis, inspired by [NGSCheckMate](https://github.com/parklab/NGSCheckMate):
+
+### Overview
+
+The pipeline consists of three programs:
+
+1. **snp-pattern-gen** - Extracts unique k-mers from SNP positions
+2. **vaf-counter** - Counts k-mer occurrences and calculates variant allele frequencies
+3. **correlation-matrix** - Computes Pearson correlation between samples
+
+### Usage
+
+#### 1. Generate SNP k-mer patterns
+
+```sh
+./snp-pattern-gen -k 21 -b snps.bed -f reference.fa -o patterns.txt
+```
+
+**Input:**
+- `-b` BED file with SNPs (format: chr, start, end, rsID, ref, alt)
+- `-f` Reference genome in FASTA format
+- `-k` K-mer length (must be odd, default: 21)
+
+**Output:** Pattern file containing unique reference and alternative k-mers for each SNP
+
+**Example BED file:**
+```
+chr17	46549406	46549407	rs201103889	A	C
+chr1	152308305	152308306	rs2184953	T	C
+chr19	4945904	4945905	rs2250981	C	T
+```
+
+#### 2. Count k-mers in FASTQ files
+
+```sh
+./vaf-counter -k 21 -p patterns.txt -o sample1.vaf reads1.fq reads2.fq
+```
+
+**Input:**
+- `-p` Pattern file from step 1
+- `-k` K-mer length (must match pattern generation)
+- One or more FASTQ files (can be gzipped)
+
+**Output:** VAF file with variant allele frequencies and depth information
+
+#### 3. Compute correlation matrix
+
+```sh
+./correlation-matrix -o correlation.corr -t sample1.vaf sample2.vaf sample3.vaf
+```
+
+**Input:**
+- Multiple VAF files from step 2
+- `-t` Optional flag to generate dendrogram/tree
+
+**Output:** 
+- Correlation matrix file
+- Optional tree file (UPGMA clustering)
+
+### Quick Start
+
+```sh
+# Build the tools
+make snp-pattern-gen vaf-counter correlation-matrix
+
+# Run the pipeline
+./snp-pattern-gen -k 21 -b dbSNP.bed -f hg38.fa -o patterns.txt
+./vaf-counter -k 21 -p patterns.txt -o sample1.vaf sample1_R1.fq.gz sample1_R2.fq.gz
+./vaf-counter -k 21 -p patterns.txt -o sample2.vaf sample2_R1.fq.gz sample2_R2.fq.gz
+./correlation-matrix -o correlation.corr -t sample1.vaf sample2.vaf
+```
+
+### Applications
+
+- Sample identity verification and mix-up detection
+- Cross-contamination detection
+- Sample relatedness estimation
+- Quality control in sequencing projects
+
+---
+
+## K-mer Counting Tools - Getting Started
 
 ```sh
 git clone https://github.com/lh3/kmer-cnt
