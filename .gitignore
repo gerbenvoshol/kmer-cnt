@@ -12,5 +12,6 @@ yak-count
 snp-pattern-gen
 vaf-counter
 correlation-matrix
+match-classifier
 test_data/
 _codeql_detected_source_root
