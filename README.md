@@ -36,15 +36,19 @@ chr19	4945904	4945905	rs2250981	C	T
 #### 2. Count k-mers in FASTQ files
 
 ```sh
-./vaf-counter -k 21 -p patterns.txt -o sample1.vaf reads1.fq reads2.fq
+./vaf-counter -k 21 -t 4 -p patterns.txt -o sample1.vaf reads1.fq reads2.fq
 ```
 
 **Input:**
 - `-p` Pattern file from step 1
 - `-k` K-mer length (must match pattern generation)
+- `-t` Number of threads (default: 4, for faster multi-threaded processing)
+- `-b` Block size for batching sequences (default: 10000000)
 - One or more FASTQ files (can be gzipped)
 
 **Output:** VAF file with variant allele frequencies and depth information
+
+**Performance:** vaf-counter uses multi-threaded k-mer counting similar to kc-c4.c, with a 3-stage pipeline (read sequences, extract k-mers, lookup k-mers) for optimal performance.
 
 #### 3. Compute correlation matrix
 
