@@ -172,14 +172,25 @@ void build_tree(sample_t *samples, int n_samples, double **corr_matrix, FILE *tr
 	
 	// Convert correlation to distance (1 - r)
 	dist = (double**)malloc(n_samples * sizeof(double*));
+	if (!dist) return;
 	for (i = 0; i < n_samples; ++i) {
 		dist[i] = (double*)malloc(n_samples * sizeof(double));
+		if (!dist[i]) {
+			for (j = 0; j < i; ++j) free(dist[j]);
+			free(dist);
+			return;
+		}
 		for (j = 0; j < n_samples; ++j) {
 			dist[i][j] = 1.0 - corr_matrix[i][j];
 		}
 	}
 	
 	active = (int*)malloc(n_samples * sizeof(int));
+	if (!active) {
+		for (i = 0; i < n_samples; ++i) free(dist[i]);
+		free(dist);
+		return;
+	}
 	for (i = 0; i < n_samples; ++i) active[i] = 1;
 	
 	fprintf(tree_fp, "# Simple dendrogram (UPGMA-like clustering)\n");
@@ -247,6 +258,10 @@ int main(int argc, char *argv[])
 	
 	samples = (sample_t*)calloc(n_samples, sizeof(sample_t));
 	snps = (snp_info_t*)calloc(MAX_SNPS, sizeof(snp_info_t));
+	if (!samples || !snps) {
+		fprintf(stderr, "Error: failed to allocate memory\n");
+		return 1;
+	}
 	
 	for (i = 0; i < n_samples; ++i) {
 		if (!load_vaf_file(argv[o.ind + i], &samples[i], snps, &n_snps)) {
@@ -260,8 +275,16 @@ int main(int argc, char *argv[])
 	
 	// Allocate correlation matrix
 	corr_matrix = (double**)malloc(n_samples * sizeof(double*));
+	if (!corr_matrix) {
+		fprintf(stderr, "Error: failed to allocate correlation matrix\n");
+		return 1;
+	}
 	for (i = 0; i < n_samples; ++i) {
 		corr_matrix[i] = (double*)malloc(n_samples * sizeof(double));
+		if (!corr_matrix[i]) {
+			fprintf(stderr, "Error: failed to allocate correlation matrix row\n");
+			return 1;
+		}
 	}
 	
 	calculate_correlation_matrix(samples, n_samples, corr_matrix);

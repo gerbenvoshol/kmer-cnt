@@ -91,6 +91,10 @@ pattern_db_t *load_patterns(const char *fn, int k)
 	if (!fp) return 0;
 	
 	db = (pattern_db_t*)calloc(1, sizeof(pattern_db_t));
+	if (!db) {
+		fclose(fp);
+		return 0;
+	}
 	
 	while (fscanf(fp, "%255s%d%d%255s %c %c%127s%127s", 
 	              pat.chr, &pat.start, &pat.end, pat.rsid, 

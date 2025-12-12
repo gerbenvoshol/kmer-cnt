@@ -60,14 +60,23 @@ fasta_db_t *load_fasta(const char *fn)
 	if ((fp = gzopen(fn, "r")) == 0) return 0;
 	ks = kseq_init(fp);
 	db = (fasta_db_t*)calloc(1, sizeof(fasta_db_t));
+	if (!db) {
+		kseq_destroy(ks);
+		gzclose(fp);
+		return 0;
+	}
 	
 	while (kseq_read(ks) >= 0) {
 		if (db->n == db->m) {
+			fasta_seq_t *tmp;
 			db->m = db->m? db->m << 1 : 16;
-			db->a = (fasta_seq_t*)realloc(db->a, db->m * sizeof(fasta_seq_t));
+			tmp = (fasta_seq_t*)realloc(db->a, db->m * sizeof(fasta_seq_t));
+			if (!tmp) break;
+			db->a = tmp;
 		}
 		db->a[db->n].name = strdup(ks->name.s);
 		db->a[db->n].seq = strdup(ks->seq.s);
+		if (!db->a[db->n].name || !db->a[db->n].seq) break;
 		db->a[db->n].len = ks->seq.l;
 		++db->n;
 	}
