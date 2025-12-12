@@ -12,6 +12,8 @@ KSEQ_INIT(gzFile, gzread)
 #include "khashl.h"
 KHASHL_MAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kh_hash_uint64, kh_eq_generic)
 
+#define KMER_BUF_GROWTH_FACTOR 1.2
+
 const unsigned char seq_nt4_table[256] = {
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
 	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -237,7 +239,7 @@ static void *worker_pipeline(void *data, int step, void *in)
 			if (l < p->k) continue;
 			
 			if (s->n == s->m) {
-				s->m = s->m < 16 ? 16 : s->m + (s->n >> 1);
+				s->m = s->m < 16 ? 16 : s->m + (s->m >> 1);
 				s->len = (int*)realloc(s->len, s->m * sizeof(int));
 				s->seq = (char**)realloc(s->seq, s->m * sizeof(char*));
 			}
@@ -261,7 +263,7 @@ static void *worker_pipeline(void *data, int step, void *in)
 		step_t *s = (step_t*)in;
 		int i;
 		
-		s->buf.m = (int)(s->nk * 1.2) + 1;
+		s->buf.m = (int)(s->nk * KMER_BUF_GROWTH_FACTOR) + 1;
 		s->buf.a = (uint64_t*)malloc(s->buf.m * sizeof(uint64_t));
 		s->buf.n = 0;
 		
