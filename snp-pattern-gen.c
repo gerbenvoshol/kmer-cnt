@@ -170,7 +170,7 @@ int extract_snp_kmer(fasta_seq_t *seq, int pos, char alt, int k, char *ref_kmer,
 	int start = pos - flank;
 	int i;
 	
-	if (start < 0 || pos + flank >= seq->len) return 0;
+	if (start < 0 || start + k > seq->len) return 0;
 	
 	// Check for N bases
 	for (i = 0; i < k; ++i) {
@@ -250,7 +250,7 @@ int main(int argc, char *argv[])
 	}
 	
 	fprintf(stderr, "[M::%s] Processing SNPs...\n", __func__);
-	while (fscanf(bed_fp, "%s%d%d%s%c%c", snp.chr, &snp.start, &snp.end, snp.rsid, &snp.ref, &snp.alt) == 6) {
+	while (fscanf(bed_fp, "%255s%d%d%255s %c %c", snp.chr, &snp.start, &snp.end, snp.rsid, &snp.ref, &snp.alt) == 6) {
 		fasta_seq_t *seq = find_seq(db, snp.chr);
 		++n_total;
 		

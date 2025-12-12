@@ -92,12 +92,18 @@ pattern_db_t *load_patterns(const char *fn, int k)
 	
 	db = (pattern_db_t*)calloc(1, sizeof(pattern_db_t));
 	
-	while (fscanf(fp, "%s%d%d%s %c %c%s%s", 
+	while (fscanf(fp, "%255s%d%d%255s %c %c%127s%127s", 
 	              pat.chr, &pat.start, &pat.end, pat.rsid, 
 	              &pat.ref, &pat.alt, pat.ref_kmer, pat.alt_kmer) == 8) {
 		if (db->n == db->m) {
+			pattern_t *tmp;
 			db->m = db->m ? db->m << 1 : 16;
-			db->a = (pattern_t*)realloc(db->a, db->m * sizeof(pattern_t));
+			tmp = (pattern_t*)realloc(db->a, db->m * sizeof(pattern_t));
+			if (!tmp) {
+				fclose(fp);
+				return db;
+			}
+			db->a = tmp;
 		}
 		pat.ref_count = 0;
 		pat.alt_count = 0;

@@ -42,6 +42,10 @@ int load_vaf_file(const char *fn, sample_t *sample, snp_info_t *snps, int *n_snp
 	if (ext) *ext = '\0';
 	
 	sample->vaf = (double*)malloc(MAX_SNPS * sizeof(double));
+	if (!sample->vaf) {
+		fclose(fp);
+		return 0;
+	}
 	sample->n_snps = 0;
 	
 	while (fgets(line, MAX_LINE, fp)) {
@@ -52,9 +56,15 @@ int load_vaf_file(const char *fn, sample_t *sample, snp_info_t *snps, int *n_snp
 		int pos, ref_count, alt_count, total_count;
 		double vaf;
 		
-		if (sscanf(line, "%s\t%d\t%s\t%c\t%c\t%d\t%d\t%d\t%lf",
+		if (sscanf(line, "%255s\t%d\t%255s\t%c\t%c\t%d\t%d\t%d\t%lf",
 		           chr, &pos, rsid, &ref, &alt,
 		           &ref_count, &alt_count, &total_count, &vaf) == 9) {
+			
+			// Check bounds
+			if (i >= MAX_SNPS) {
+				fprintf(stderr, "Warning: too many SNPs (max %d), truncating\n", MAX_SNPS);
+				break;
+			}
 			
 			// Store SNP info (only once, from first file)
 			if (*n_snps == i) {
