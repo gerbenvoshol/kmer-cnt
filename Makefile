@@ -37,8 +37,8 @@ kc-cpp2:kc-cpp2.cpp ketopt.h robin_hood.h
 snp-pattern-gen:snp-pattern-gen.c khashl.h ketopt.h kseq.h
 	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
 
-vaf-counter:vaf-counter.c khashl.h ketopt.h kseq.h
-	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
+vaf-counter:vaf-counter.c khashl.h ketopt.h kseq.h kthread.h
+	$(CC) $(CFLAGS) -o $@ vaf-counter.c kthread.c $(LIBS) -lpthread
 
 correlation-matrix:correlation-matrix.c ketopt.h
 	$(CC) $(CFLAGS) -o $@ $< $(MATHLIBS)

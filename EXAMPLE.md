@@ -62,15 +62,15 @@ For each sample, count occurrences of reference and alternative k-mers:
 
 ```bash
 # Sample 1
-./vaf-counter -k 21 -p patterns.txt -o sample1.vaf \
+./vaf-counter -k 21 -t 4 -p patterns.txt -o sample1.vaf \
     sample1_R1.fastq.gz sample1_R2.fastq.gz
 
 # Sample 2
-./vaf-counter -k 21 -p patterns.txt -o sample2.vaf \
+./vaf-counter -k 21 -t 4 -p patterns.txt -o sample2.vaf \
     sample2_R1.fastq.gz sample2_R2.fastq.gz
 
 # Sample 3
-./vaf-counter -k 21 -p patterns.txt -o sample3.vaf \
+./vaf-counter -k 21 -t 4 -p patterns.txt -o sample3.vaf \
     sample3_R1.fastq.gz sample3_R2.fastq.gz
 ```
 
@@ -78,7 +78,11 @@ Options:
 - `-k 21`: K-mer length (must match pattern generation)
 - `-p patterns.txt`: Pattern file from step 2
 - `-o sample1.vaf`: Output VAF file
+- `-t 4`: Number of threads (default: 4, for faster processing)
+- `-b INT`: Block size for batching (default: 10000000)
 - FASTQ files can be gzipped or uncompressed
+
+**Performance Note:** vaf-counter uses multi-threading to parallelize k-mer counting, similar to kc-c4.c. The `-t` option controls the number of worker threads used for k-mer lookup operations.
 
 Output example (`sample1.vaf`):
 ```
@@ -236,7 +240,8 @@ sample1	sample3	15.50	3.00	0.450000	0.4448	MATCHED
 
 4. **Speed**:
    - Pattern generation is I/O bound (genome loading)
-   - K-mer counting benefits from gzipped FASTQ files
+   - K-mer counting uses multi-threading (use `-t` to specify threads, default: 4)
+   - More threads significantly speed up k-mer counting on large FASTQ files
    - Correlation computation is very fast (< 1 second)
 
 ## Common Issues

@@ -4,12 +4,15 @@
 #include <string.h>
 #include <zlib.h>
 #include "ketopt.h"
+#include "kthread.h"
 
 #include "kseq.h"
 KSEQ_INIT(gzFile, gzread)
 
 #include "khashl.h"
 KHASHL_MAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kh_hash_uint64, kh_eq_generic)
+
+#define KMER_BUF_GROWTH_FACTOR 1.2
 
 const unsigned char seq_nt4_table[256] = {
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -47,6 +50,12 @@ typedef struct {
 	int n, m;
 	pattern_t *a;
 } pattern_db_t;
+
+// Buffer for storing k-mers
+typedef struct {
+	int n, m;
+	uint64_t *a;
+} kmer_buf_t;
 
 // Encode k-mer to 64-bit integer
 uint64_t encode_kmer(const char *seq, int k)
@@ -148,59 +157,163 @@ kmer_cnt_t *create_kmer_map(pattern_db_t *db, int k, int is_ref)
 	return h;
 }
 
-// Count k-mers in FASTQ files
-void count_fastq_kmers(const char *fn, int k, kmer_cnt_t *ref_map, kmer_cnt_t *alt_map, pattern_db_t *db)
+// Extract k-mers from a sequence into a buffer
+static void extract_kmers_to_buf(kmer_buf_t *buf, int k, int len, const char *seq)
 {
-	gzFile fp;
-	kseq_t *ks;
-	int l;
+	int i, l;
 	uint64_t x[2], mask = (1ULL << k*2) - 1, shift = (k - 1) * 2;
 	
-	if ((fp = gzopen(fn, "r")) == 0) return;
-	ks = kseq_init(fp);
-	
-	while (kseq_read(ks) >= 0) {
-		int i;
-		char *seq = ks->seq.s;
-		int len = ks->seq.l;
-		
-		for (i = l = 0, x[0] = x[1] = 0; i < len; ++i) {
-			int c = seq_nt4_table[(uint8_t)seq[i]];
-			if (c < 4) {
-				x[0] = (x[0] << 2 | c) & mask;
-				x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;
-				if (++l >= k) {
-					uint64_t y = x[0] < x[1] ? x[0] : x[1];
-					khint_t itr;
-					
-					// Check reference k-mers
-					itr = kmer_cnt_get(ref_map, y);
-					if (itr != kh_end(ref_map)) {
-						int idx = kh_val(ref_map, itr);
-						++db->a[idx].ref_count;
-					}
-					
-					// Check alternative k-mers
-					itr = kmer_cnt_get(alt_map, y);
-					if (itr != kh_end(alt_map)) {
-						int idx = kh_val(alt_map, itr);
-						++db->a[idx].alt_count;
-					}
+	for (i = l = 0, x[0] = x[1] = 0; i < len; ++i) {
+		int c = seq_nt4_table[(uint8_t)seq[i]];
+		if (c < 4) {
+			x[0] = (x[0] << 2 | c) & mask;
+			x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;
+			if (++l >= k) {
+				uint64_t y = x[0] < x[1] ? x[0] : x[1];
+				if (buf->n == buf->m) {
+					buf->m = buf->m < 8 ? 8 : buf->m + (buf->m >> 1);
+					buf->a = (uint64_t*)realloc(buf->a, buf->m * sizeof(uint64_t));
 				}
-			} else {
-				l = 0;
-				x[0] = x[1] = 0;
+				buf->a[buf->n++] = y;
 			}
+		} else {
+			l = 0;
+			x[0] = x[1] = 0;
 		}
 	}
+}
+
+// Global data for pipeline threading
+typedef struct {
+	int k, block_len, n_thread;
+	kseq_t *ks;
+	kmer_cnt_t *ref_map;
+	kmer_cnt_t *alt_map;
+	pattern_db_t *db;
+} pipeline_t;
+
+// Data for each pipeline step
+typedef struct {
+	pipeline_t *p;
+	int n, m, sum_len, nk;
+	int *len;
+	char **seq;
+	kmer_buf_t buf;
+} step_t;
+
+// Worker function for parallel k-mer lookup
+static void worker_lookup(void *data, long i, int tid)
+{
+	step_t *s = (step_t*)data;
+	uint64_t kmer = s->buf.a[i];
+	khint_t itr;
 	
-	kseq_destroy(ks);
+	// Check reference k-mers
+	itr = kmer_cnt_get(s->p->ref_map, kmer);
+	if (itr != kh_end(s->p->ref_map)) {
+		int idx = kh_val(s->p->ref_map, itr);
+		__sync_fetch_and_add(&s->p->db->a[idx].ref_count, 1);
+	}
+	
+	// Check alternative k-mers
+	itr = kmer_cnt_get(s->p->alt_map, kmer);
+	if (itr != kh_end(s->p->alt_map)) {
+		int idx = kh_val(s->p->alt_map, itr);
+		__sync_fetch_and_add(&s->p->db->a[idx].alt_count, 1);
+	}
+}
+
+// Pipeline worker function
+static void *worker_pipeline(void *data, int step, void *in)
+{
+	pipeline_t *p = (pipeline_t*)data;
+	
+	if (step == 0) { // Step 1: read sequences
+		int ret;
+		step_t *s;
+		s = (step_t*)calloc(1, sizeof(step_t));
+		s->p = p;
+		
+		while ((ret = kseq_read(p->ks)) >= 0) {
+			int l = p->ks->seq.l;
+			if (l < p->k) continue;
+			
+			if (s->n == s->m) {
+				s->m = s->m < 16 ? 16 : s->m + (s->m >> 1);
+				s->len = (int*)realloc(s->len, s->m * sizeof(int));
+				s->seq = (char**)realloc(s->seq, s->m * sizeof(char*));
+			}
+			s->seq[s->n] = (char*)malloc(l);
+			memcpy(s->seq[s->n], p->ks->seq.s, l);
+			s->len[s->n++] = l;
+			s->sum_len += l;
+			s->nk += l - p->k + 1;
+			
+			if (s->sum_len >= p->block_len)
+				break;
+		}
+		
+		if (s->sum_len == 0) {
+			free(s);
+			return 0;
+		}
+		return s;
+		
+	} else if (step == 1) { // Step 2: extract k-mers
+		step_t *s = (step_t*)in;
+		int i;
+		
+		s->buf.m = (int)(s->nk * KMER_BUF_GROWTH_FACTOR) + 1;
+		s->buf.a = (uint64_t*)malloc(s->buf.m * sizeof(uint64_t));
+		s->buf.n = 0;
+		
+		for (i = 0; i < s->n; ++i) {
+			extract_kmers_to_buf(&s->buf, p->k, s->len[i], s->seq[i]);
+			free(s->seq[i]);
+		}
+		free(s->seq);
+		free(s->len);
+		
+		return s;
+		
+	} else if (step == 2) { // Step 3: lookup k-mers
+		step_t *s = (step_t*)in;
+		
+		kt_for(p->n_thread, worker_lookup, s, s->buf.n);
+		
+		free(s->buf.a);
+		free(s);
+	}
+	
+	return 0;
+}
+
+// Count k-mers in FASTQ files with multi-threading
+void count_fastq_kmers(const char *fn, int k, int n_thread, int block_size, 
+                       kmer_cnt_t *ref_map, kmer_cnt_t *alt_map, pattern_db_t *db)
+{
+	pipeline_t pl;
+	gzFile fp;
+	
+	if ((fp = gzopen(fn, "r")) == 0) return;
+	
+	pl.ks = kseq_init(fp);
+	pl.k = k;
+	pl.n_thread = n_thread;
+	pl.block_len = block_size;
+	pl.ref_map = ref_map;
+	pl.alt_map = alt_map;
+	pl.db = db;
+	
+	kt_pipeline(3, worker_pipeline, &pl, 3);
+	
+	kseq_destroy(pl.ks);
 	gzclose(fp);
 }
 
 int main(int argc, char *argv[])
 {
-	int c, k = 21, i;
+	int c, k = 21, i, n_thread = 4, block_size = 10000000;
 	char *pattern_fn = 0, *out_fn = 0;
 	pattern_db_t *db;
 	kmer_cnt_t *ref_map, *alt_map;
@@ -209,18 +322,22 @@ int main(int argc, char *argv[])
 	double avg_depth;
 	ketopt_t o = KETOPT_INIT;
 	
-	while ((c = ketopt(&o, argc, argv, 1, "k:p:o:", 0)) >= 0) {
+	while ((c = ketopt(&o, argc, argv, 1, "k:p:o:t:b:", 0)) >= 0) {
 		if (c == 'k') k = atoi(o.arg);
 		else if (c == 'p') pattern_fn = o.arg;
 		else if (c == 'o') out_fn = o.arg;
+		else if (c == 't') n_thread = atoi(o.arg);
+		else if (c == 'b') block_size = atoi(o.arg);
 	}
 	
 	if (!pattern_fn || !out_fn || argc - o.ind < 1) {
-		fprintf(stderr, "Usage: vaf-counter -k %d -p <patterns.txt> -o <output.vaf> <reads.fq> [reads2.fq ...]\n", k);
+		fprintf(stderr, "Usage: vaf-counter [options] -p <patterns.txt> -o <output.vaf> <reads.fq> [reads2.fq ...]\n");
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -k INT    k-mer length [%d]\n", k);
 		fprintf(stderr, "  -p FILE   input pattern file\n");
 		fprintf(stderr, "  -o FILE   output VAF file\n");
+		fprintf(stderr, "  -t INT    number of threads [%d]\n", n_thread);
+		fprintf(stderr, "  -b INT    block size [%d]\n", block_size);
 		return 1;
 	}
 	
@@ -236,10 +353,10 @@ int main(int argc, char *argv[])
 	ref_map = create_kmer_map(db, k, 1);
 	alt_map = create_kmer_map(db, k, 0);
 	
-	fprintf(stderr, "[M::%s] Counting k-mers in FASTQ files...\n", __func__);
+	fprintf(stderr, "[M::%s] Counting k-mers in FASTQ files with %d threads...\n", __func__, n_thread);
 	for (i = o.ind; i < argc; ++i) {
 		fprintf(stderr, "[M::%s] Processing %s...\n", __func__, argv[i]);
-		count_fastq_kmers(argv[i], k, ref_map, alt_map, db);
+		count_fastq_kmers(argv[i], k, n_thread, block_size, ref_map, alt_map, db);
 	}
 	
 	// Calculate total counts
