@@ -13,3 +13,4 @@ snp-pattern-gen
 vaf-counter
 correlation-matrix
 test_data/
+_codeql_detected_source_root
