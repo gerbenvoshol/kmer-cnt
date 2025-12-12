@@ -1,4 +1,131 @@
-## Getting Started
+## SNP K-mer Analysis Tools
+
+This repository includes four new C programs for SNP-based sample correlation analysis, inspired by [NGSCheckMate](https://github.com/parklab/NGSCheckMate):
+
+### Overview
+
+The pipeline consists of four programs:
+
+1. **snp-pattern-gen** - Extracts unique k-mers from SNP positions
+2. **vaf-counter** - Counts k-mer occurrences and calculates variant allele frequencies
+3. **correlation-matrix** - Computes Pearson correlation between samples
+4. **match-classifier** - Classifies matched samples using depth-dependent thresholds
+
+### Usage
+
+#### 1. Generate SNP k-mer patterns
+
+```sh
+./snp-pattern-gen -k 21 -b snps.bed -f reference.fa -o patterns.txt
+```
+
+**Input:**
+- `-b` BED file with SNPs (format: chr, start, end, rsID, ref, alt)
+- `-f` Reference genome in FASTA format
+- `-k` K-mer length (must be odd, default: 21)
+
+**Output:** Pattern file containing unique reference and alternative k-mers for each SNP
+
+**Example BED file:**
+```
+chr17	46549406	46549407	rs201103889	A	C
+chr1	152308305	152308306	rs2184953	T	C
+chr19	4945904	4945905	rs2250981	C	T
+```
+
+#### 2. Count k-mers in FASTQ files
+
+```sh
+./vaf-counter -k 21 -p patterns.txt -o sample1.vaf reads1.fq reads2.fq
+```
+
+**Input:**
+- `-p` Pattern file from step 1
+- `-k` K-mer length (must match pattern generation)
+- One or more FASTQ files (can be gzipped)
+
+**Output:** VAF file with variant allele frequencies and depth information
+
+#### 3. Compute correlation matrix
+
+```sh
+# Using preset mode for matched samples (same individual)
+./correlation-matrix -M matched -o correlation.corr -t sample1.vaf sample2.vaf
+
+# Using preset mode for unmatched/related samples
+./correlation-matrix -M unmatched -o correlation.corr -t sample1.vaf sample2.vaf sample3.vaf
+
+# Manual configuration
+./correlation-matrix -d 5 -m 15 -o correlation.corr sample1.vaf sample2.vaf
+```
+
+**Input:**
+- Multiple VAF files from step 2
+- `-M MODE` Preset modes: `matched` (depth≥5, SNPs≥10), `unmatched` (depth≥1, SNPs≥20), `strict` (depth≥10, SNPs≥30)
+- `-t` Optional flag to generate dendrogram/tree
+- `-d INT` Minimum depth per SNP (default: 1)
+- `-m INT` Minimum SNPs with sufficient depth required (default: 20)
+
+**Output:** 
+- Correlation matrix file (depth-aware Pearson correlation)
+- Optional tree file (UPGMA clustering)
+
+**Note:** The correlation calculation is depth-aware with different thresholds for different scenarios:
+- **Matched samples** (same individual, replicates): Use higher depth cutoff (≥5) for confident matches
+- **Unmatched samples** (related/unrelated): Use lower depth cutoff (≥1) but require more SNPs (≥20)
+- Manual `-m` and `-d` flags override preset modes
+
+#### 4. Classify matched samples
+
+```sh
+# Simple threshold-based classification
+./match-classifier -c correlation.corr -o matches.txt -t 0.95
+
+# NGSCheckMate predefined model with depth-dependent thresholds
+./match-classifier -c correlation.corr -o matches.txt -P sample1.vaf sample2.vaf sample3.vaf
+
+# Family mode (for related samples)
+./match-classifier -c correlation.corr -o matches.txt -P -F sample1.vaf sample2.vaf
+```
+
+**Input:**
+- `-c` Correlation matrix from step 3
+- `-P` Use NGSCheckMate predefined model (requires VAF files for depth info)
+- `-F` Family mode for related samples (use with `-P`)
+- `-t` Manual threshold (default: 0.95)
+
+**Output:** List of matched sample pairs with status and depth-dependent thresholds
+
+**Note:** The classifier uses depth-dependent thresholds following NGSCheckMate:
+- **depth > 10**: High confidence matching (stricter thresholds)
+- **depth 5-10**: Medium confidence
+- **depth 2-5**: Lower confidence  
+- **depth < 2**: Very low confidence (more lenient thresholds)
+
+### Quick Start
+
+```sh
+# Build the tools
+make snp-pattern-gen vaf-counter correlation-matrix match-classifier
+
+# Run the complete pipeline
+./snp-pattern-gen -k 21 -b dbSNP.bed -f hg38.fa -o patterns.txt
+./vaf-counter -k 21 -p patterns.txt -o sample1.vaf sample1_R1.fq.gz sample1_R2.fq.gz
+./vaf-counter -k 21 -p patterns.txt -o sample2.vaf sample2_R1.fq.gz sample2_R2.fq.gz
+./correlation-matrix -M matched -o correlation.corr sample1.vaf sample2.vaf
+./match-classifier -c correlation.corr -o matches.txt -P sample1.vaf sample2.vaf
+```
+
+### Applications
+
+- Sample identity verification and mix-up detection
+- Cross-contamination detection
+- Sample relatedness estimation
+- Quality control in sequencing projects
+
+---
+
+## K-mer Counting Tools - Getting Started
 
 ```sh
 git clone https://github.com/lh3/kmer-cnt

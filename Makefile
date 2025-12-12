@@ -1,7 +1,8 @@
 CFLAGS=-g -Wall -O2
 CXXFLAGS=$(CFLAGS) -std=c++11
 LIBS=-lz
-PROG=kc-c1 kc-c2 kc-c3 kc-c4 kc-cpp1 kc-cpp2 yak-count
+MATHLIBS=-lm
+PROG=kc-c1 kc-c2 kc-c3 kc-c4 kc-cpp1 kc-cpp2 yak-count snp-pattern-gen vaf-counter correlation-matrix match-classifier
 
 ifneq ($(asan),)
 	CFLAGS+=-fsanitize=address
@@ -32,6 +33,18 @@ kc-cpp1:kc-cpp1.cpp ketopt.h
 
 kc-cpp2:kc-cpp2.cpp ketopt.h robin_hood.h
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+
+snp-pattern-gen:snp-pattern-gen.c khashl.h ketopt.h kseq.h
+	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
+
+vaf-counter:vaf-counter.c khashl.h ketopt.h kseq.h
+	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
+
+correlation-matrix:correlation-matrix.c ketopt.h
+	$(CC) $(CFLAGS) -o $@ $< $(MATHLIBS)
+
+match-classifier:match-classifier.c ketopt.h
+	$(CC) $(CFLAGS) -o $@ $< $(MATHLIBS)
 
 clean:
 	rm -fr *.dSYM $(PROG)
