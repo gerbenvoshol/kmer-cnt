@@ -1,3 +1,20 @@
+/*
+ * snp-pattern-gen: Extract unique k-mer patterns from SNP positions
+ * 
+ * This program identifies SNPs where:
+ * - The reference k-mer occurs exactly once in the genome
+ * - The alternative k-mer does not occur in the genome
+ * 
+ * Optimization approach (memory-efficient):
+ * 1. First pass: Read BED file and generate candidate k-mers (ref and alt)
+ * 2. Second pass: Scan genome and count ONLY the candidate k-mers
+ * 3. Third pass: Process SNPs and output those with unique k-mer pairs
+ * 
+ * This approach stores only ~20K-50K candidate k-mers (from SNPs) instead of
+ * millions of k-mers from the entire genome, reducing memory usage by >100x
+ * and improving performance.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -141,8 +158,8 @@ uint64_t canonical_kmer(uint64_t kmer, int k)
 	return kmer < rc ? kmer : rc;
 }
 
-// Count k-mer occurrences in entire genome
-void count_genome_kmers(fasta_db_t *db, int k, kmer_t *h)
+// Count only candidate k-mers in entire genome
+void count_candidate_kmers(fasta_db_t *db, int k, kmer_t *h)
 {
 	int i, j, l;
 	uint64_t x[2], mask = (1ULL << k*2) - 1, shift = (k - 1) * 2;
@@ -157,12 +174,12 @@ void count_genome_kmers(fasta_db_t *db, int k, kmer_t *h)
 				x[0] = (x[0] << 2 | c) & mask;
 				x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;
 				if (++l >= k) {
-					khint_t itr;
-					int absent;
 					uint64_t y = x[0] < x[1] ? x[0] : x[1];
-					itr = kmer_put(h, y, &absent);
-					if (absent) kh_val(h, itr) = 0;
-					++kh_val(h, itr);
+					khint_t itr = kmer_get(h, y);
+					// Only count if this k-mer is in our candidate set
+					if (itr != kh_end(h)) {
+						++kh_val(h, itr);
+					}
 				}
 			} else {
 				l = 0;
@@ -208,7 +225,7 @@ int main(int argc, char *argv[])
 	kmer_t *h;
 	snp_t snp;
 	char ref_kmer[128], alt_kmer[128];
-	int n_total = 0, n_unique = 0;
+	int n_total = 0, n_unique = 0, n_candidate = 0;
 	ketopt_t o = KETOPT_INIT;
 	
 	while ((c = ketopt(&o, argc, argv, 1, "k:b:f:o:", 0)) >= 0) {
@@ -241,25 +258,73 @@ int main(int argc, char *argv[])
 	}
 	fprintf(stderr, "[M::%s] Loaded %d sequences\n", __func__, db->n);
 	
-	fprintf(stderr, "[M::%s] Counting genome k-mers...\n", __func__);
-	h = kmer_init();
-	count_genome_kmers(db, k, h);
-	fprintf(stderr, "[M::%s] Found %ld unique k-mers in genome\n", __func__, (long)kh_size(h));
-	
+	// First pass: read BED file and generate candidate k-mers
+	fprintf(stderr, "[M::%s] Generating candidate k-mers from BED file...\n", __func__);
 	bed_fp = fopen(bed_fn, "r");
 	if (!bed_fp) {
 		fprintf(stderr, "Error: failed to open BED file\n");
+		fasta_db_destroy(db);
+		return 1;
+	}
+	
+	h = kmer_init();
+	while (fscanf(bed_fp, "%254s%d%d%254s %c %c", snp.chr, &snp.start, &snp.end, snp.rsid, &snp.ref, &snp.alt) == 6) {
+		fasta_seq_t *seq = find_seq(db, snp.chr);
+		
+		if (!seq) continue;
+		
+		if (extract_snp_kmer(seq, snp.start, snp.alt, k, ref_kmer, alt_kmer)) {
+			uint64_t ref_enc = encode_kmer(ref_kmer, k);
+			uint64_t alt_enc = encode_kmer(alt_kmer, k);
+			
+			if (ref_enc == UINT64_MAX || alt_enc == UINT64_MAX) continue;
+			
+			uint64_t ref_can = canonical_kmer(ref_enc, k);
+			uint64_t alt_can = canonical_kmer(alt_enc, k);
+			
+			// Initialize candidate k-mers with count 0
+			khint_t itr;
+			int absent;
+			itr = kmer_put(h, ref_can, &absent);
+			if (absent) {
+				kh_val(h, itr) = 0;
+				++n_candidate;
+			}
+			itr = kmer_put(h, alt_can, &absent);
+			if (absent) {
+				kh_val(h, itr) = 0;
+				++n_candidate;
+			}
+		}
+	}
+	fclose(bed_fp);
+	fprintf(stderr, "[M::%s] Generated %d candidate k-mers\n", __func__, n_candidate);
+	
+	// Second pass: count only candidate k-mers in genome
+	fprintf(stderr, "[M::%s] Counting candidate k-mers in genome...\n", __func__);
+	count_candidate_kmers(db, k, h);
+	fprintf(stderr, "[M::%s] Finished counting k-mers\n", __func__);
+	
+	// Third pass: process SNPs and output unique pairs
+	bed_fp = fopen(bed_fn, "r");
+	if (!bed_fp) {
+		fprintf(stderr, "Error: failed to open BED file\n");
+		kmer_destroy(h);
+		fasta_db_destroy(db);
 		return 1;
 	}
 	
 	out_fp = fopen(out_fn, "w");
 	if (!out_fp) {
 		fprintf(stderr, "Error: failed to open output file\n");
+		fclose(bed_fp);
+		kmer_destroy(h);
+		fasta_db_destroy(db);
 		return 1;
 	}
 	
 	fprintf(stderr, "[M::%s] Processing SNPs...\n", __func__);
-	while (fscanf(bed_fp, "%255s%d%d%255s %c %c", snp.chr, &snp.start, &snp.end, snp.rsid, &snp.ref, &snp.alt) == 6) {
+	while (fscanf(bed_fp, "%254s%d%d%254s %c %c", snp.chr, &snp.start, &snp.end, snp.rsid, &snp.ref, &snp.alt) == 6) {
 		fasta_seq_t *seq = find_seq(db, snp.chr);
 		++n_total;
 		
@@ -280,9 +345,9 @@ int main(int argc, char *argv[])
 			khint_t ref_itr = kmer_get(h, ref_can);
 			khint_t alt_itr = kmer_get(h, alt_can);
 			
-			// Check if both k-mers are unique (occur exactly once)
+			// Check if ref k-mer occurs exactly once and alt k-mer occurs zero times
 			if (ref_itr != kh_end(h) && kh_val(h, ref_itr) == 1 &&
-			    alt_itr == kh_end(h)) {
+			    alt_itr != kh_end(h) && kh_val(h, alt_itr) == 0) {
 				fprintf(out_fp, "%s\t%d\t%d\t%s\t%c\t%c\t%s\t%s\n",
 				        snp.chr, snp.start, snp.end, snp.rsid, snp.ref, snp.alt,
 				        ref_kmer, alt_kmer);
