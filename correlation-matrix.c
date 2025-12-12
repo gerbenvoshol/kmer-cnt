@@ -10,7 +10,8 @@
 
 typedef struct {
 	char name[256];
-	double *vaf;  // VAF values for each SNP
+	double *vaf;    // VAF values for each SNP
+	int *depth;     // Depth (total count) for each SNP
 	int n_snps;
 } sample_t;
 
@@ -42,7 +43,10 @@ int load_vaf_file(const char *fn, sample_t *sample, snp_info_t *snps, int *n_snp
 	if (ext) *ext = '\0';
 	
 	sample->vaf = (double*)malloc(MAX_SNPS * sizeof(double));
-	if (!sample->vaf) {
+	sample->depth = (int*)malloc(MAX_SNPS * sizeof(int));
+	if (!sample->vaf || !sample->depth) {
+		free(sample->vaf);
+		free(sample->depth);
 		fclose(fp);
 		return 0;
 	}
@@ -75,6 +79,7 @@ int load_vaf_file(const char *fn, sample_t *sample, snp_info_t *snps, int *n_snp
 			}
 			
 			sample->vaf[i] = vaf;
+			sample->depth[i] = total_count;
 			i++;
 		}
 	}
@@ -84,51 +89,70 @@ int load_vaf_file(const char *fn, sample_t *sample, snp_info_t *snps, int *n_snp
 	return 1;
 }
 
-// Calculate Pearson correlation coefficient
-double pearson_correlation(double *x, double *y, int n)
+// Calculate depth-aware Pearson correlation coefficient
+// Only include SNPs with sufficient depth (>=1) in both samples
+double pearson_correlation_depth_aware(double *x, int *depth_x, double *y, int *depth_y, int n, int min_snps)
 {
-	int i;
+	int i, valid_count = 0;
 	double sum_x = 0, sum_y = 0, sum_xy = 0;
 	double sum_x2 = 0, sum_y2 = 0;
 	double mean_x, mean_y, numerator, denom_x, denom_y;
 	
-	if (n <= 1) return 0.0;
-	
-	// Calculate means
+	// First pass: count valid SNPs with sufficient depth
 	for (i = 0; i < n; ++i) {
-		sum_x += x[i];
-		sum_y += y[i];
+		if (depth_x[i] >= 1 && depth_y[i] >= 1) {
+			valid_count++;
+		}
 	}
-	mean_x = sum_x / n;
-	mean_y = sum_y / n;
 	
-	// Calculate correlation
+	// Require minimum number of valid SNPs (default 20, like NGSCheckMate)
+	if (valid_count < min_snps) return 0.0;
+	
+	// Calculate means using only valid SNPs
 	for (i = 0; i < n; ++i) {
-		double dx = x[i] - mean_x;
-		double dy = y[i] - mean_y;
-		sum_xy += dx * dy;
-		sum_x2 += dx * dx;
-		sum_y2 += dy * dy;
+		if (depth_x[i] >= 1 && depth_y[i] >= 1) {
+			sum_x += x[i];
+			sum_y += y[i];
+		}
+	}
+	mean_x = sum_x / valid_count;
+	mean_y = sum_y / valid_count;
+	
+	// Calculate correlation using only valid SNPs
+	for (i = 0; i < n; ++i) {
+		if (depth_x[i] >= 1 && depth_y[i] >= 1) {
+			double dx = x[i] - mean_x;
+			double dy = y[i] - mean_y;
+			sum_xy += dx * dy;
+			sum_x2 += dx * dx;
+			sum_y2 += dy * dy;
+		}
 	}
 	
 	numerator = sum_xy;
 	denom_x = sqrt(sum_x2);
 	denom_y = sqrt(sum_y2);
 	
-	if (denom_x < 1e-10 || denom_y < 1e-10) return 0.0;
+	// Handle division by zero with small epsilon (like NGSCheckMate)
+	if (denom_x < 1e-10 || denom_y < 1e-10) {
+		return numerator / (sqrt(sum_x2 * sum_y2) + 0.00001);
+	}
 	
 	return numerator / (denom_x * denom_y);
 }
 
-// Calculate distance matrix using Pearson correlation
-void calculate_correlation_matrix(sample_t *samples, int n_samples, double **corr_matrix)
+// Calculate distance matrix using depth-aware Pearson correlation
+void calculate_correlation_matrix(sample_t *samples, int n_samples, double **corr_matrix, int min_snps)
 {
 	int i, j;
 	
 	for (i = 0; i < n_samples; ++i) {
 		corr_matrix[i][i] = 1.0; // self-correlation is 1
 		for (j = i + 1; j < n_samples; ++j) {
-			double r = pearson_correlation(samples[i].vaf, samples[j].vaf, samples[i].n_snps);
+			double r = pearson_correlation_depth_aware(
+				samples[i].vaf, samples[i].depth,
+				samples[j].vaf, samples[j].depth,
+				samples[i].n_snps, min_snps);
 			corr_matrix[i][j] = r;
 			corr_matrix[j][i] = r; // symmetric
 		}
@@ -232,6 +256,7 @@ int main(int argc, char *argv[])
 	int c, i, j;
 	char *out_fn = 0;
 	int build_tree_flag = 0;
+	int min_snps = 20;  // Minimum SNPs required for correlation (like NGSCheckMate)
 	sample_t *samples;
 	snp_info_t *snps;
 	int n_samples, n_snps = 0;
@@ -239,18 +264,20 @@ int main(int argc, char *argv[])
 	FILE *out_fp, *tree_fp = NULL;
 	ketopt_t o = KETOPT_INIT;
 	
-	while ((c = ketopt(&o, argc, argv, 1, "o:t", 0)) >= 0) {
+	while ((c = ketopt(&o, argc, argv, 1, "o:tm:", 0)) >= 0) {
 		if (c == 'o') out_fn = o.arg;
 		else if (c == 't') build_tree_flag = 1;
+		else if (c == 'm') min_snps = atoi(o.arg);
 	}
 	
 	n_samples = argc - o.ind;
 	
 	if (!out_fn || n_samples < 2) {
-		fprintf(stderr, "Usage: correlation-matrix -o <output.corr> [-t] <sample1.vaf> <sample2.vaf> [sample3.vaf ...]\n");
+		fprintf(stderr, "Usage: correlation-matrix -o <output.corr> [-t] [-m INT] <sample1.vaf> <sample2.vaf> [sample3.vaf ...]\n");
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -o FILE   output correlation matrix file\n");
 		fprintf(stderr, "  -t        build tree/dendrogram (outputs to <output.tree>)\n");
+		fprintf(stderr, "  -m INT    minimum SNPs with depth >= 1 required for correlation [%d]\n", min_snps);
 		return 1;
 	}
 	
@@ -287,7 +314,7 @@ int main(int argc, char *argv[])
 		}
 	}
 	
-	calculate_correlation_matrix(samples, n_samples, corr_matrix);
+	calculate_correlation_matrix(samples, n_samples, corr_matrix, min_snps);
 	
 	// Write correlation matrix
 	fprintf(stderr, "[M::%s] Writing correlation matrix...\n", __func__);
@@ -336,6 +363,7 @@ int main(int argc, char *argv[])
 	// Free memory
 	for (i = 0; i < n_samples; ++i) {
 		free(samples[i].vaf);
+		free(samples[i].depth);
 		free(corr_matrix[i]);
 	}
 	free(corr_matrix);

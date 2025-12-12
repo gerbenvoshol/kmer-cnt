@@ -54,10 +54,13 @@ chr19	4945904	4945905	rs2250981	C	T
 **Input:**
 - Multiple VAF files from step 2
 - `-t` Optional flag to generate dendrogram/tree
+- `-m` Minimum SNPs with depth ≥1 required for correlation (default: 20)
 
 **Output:** 
-- Correlation matrix file
+- Correlation matrix file (depth-aware Pearson correlation)
 - Optional tree file (UPGMA clustering)
+
+**Note:** The correlation calculation is depth-aware - only SNPs with depth ≥1 in both samples are included, and a minimum of 20 valid SNPs (by default) is required to compute correlation. This prevents misleading correlations from low-coverage samples.
 
 ### Quick Start
 

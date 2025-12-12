@@ -99,6 +99,13 @@ Compare all samples to identify relationships:
 Options:
 - `-o correlation.corr`: Output correlation matrix file
 - `-t`: Generate dendrogram/tree file (optional)
+- `-m INT`: Minimum SNPs with depth ≥1 required for correlation (default: 20)
+
+**Important:** The correlation calculation is **depth-aware**:
+- Only SNPs with depth ≥1 in both samples are included
+- Requires minimum 20 valid SNPs by default (like NGSCheckMate)
+- Returns 0.0 correlation if insufficient SNPs have adequate depth
+- Prevents spurious correlations from low-coverage samples
 
 Output example (`correlation.corr`):
 ```
@@ -128,6 +135,9 @@ Cluster: sample1 (0.2750) <-> sample3 (0.2750)
 - **r > 0.95**: Likely the same individual or clonal replicates
 - **r = 0.8-0.95**: Possibly related individuals (siblings, parent-child)
 - **r < 0.5**: Unrelated samples
+- **r = 0.0**: Insufficient data (fewer than minimum SNPs with adequate depth)
+
+**Note on Depth Dependency:** Correlation values are depth-dependent. Low-coverage samples may return 0.0 correlation even if they are from the same individual, simply because there aren't enough SNPs with sufficient depth to calculate a reliable correlation. Always check that samples have adequate depth before interpreting low correlation values.
 
 ### Applications
 1. **Sample Mix-up Detection**: Verify that labeled samples match expected correlations
