@@ -1,14 +1,15 @@
 ## SNP K-mer Analysis Tools
 
-This repository includes three new C programs for SNP-based sample correlation analysis, inspired by [NGSCheckMate](https://github.com/parklab/NGSCheckMate):
+This repository includes four new C programs for SNP-based sample correlation analysis, inspired by [NGSCheckMate](https://github.com/parklab/NGSCheckMate):
 
 ### Overview
 
-The pipeline consists of three programs:
+The pipeline consists of four programs:
 
 1. **snp-pattern-gen** - Extracts unique k-mers from SNP positions
 2. **vaf-counter** - Counts k-mer occurrences and calculates variant allele frequencies
 3. **correlation-matrix** - Computes Pearson correlation between samples
+4. **match-classifier** - Classifies matched samples using depth-dependent thresholds
 
 ### Usage
 
@@ -74,17 +75,45 @@ chr19	4945904	4945905	rs2250981	C	T
 - **Unmatched samples** (related/unrelated): Use lower depth cutoff (≥1) but require more SNPs (≥20)
 - Manual `-m` and `-d` flags override preset modes
 
+#### 4. Classify matched samples
+
+```sh
+# Simple threshold-based classification
+./match-classifier -c correlation.corr -o matches.txt -t 0.95
+
+# NGSCheckMate predefined model with depth-dependent thresholds
+./match-classifier -c correlation.corr -o matches.txt -P sample1.vaf sample2.vaf sample3.vaf
+
+# Family mode (for related samples)
+./match-classifier -c correlation.corr -o matches.txt -P -F sample1.vaf sample2.vaf
+```
+
+**Input:**
+- `-c` Correlation matrix from step 3
+- `-P` Use NGSCheckMate predefined model (requires VAF files for depth info)
+- `-F` Family mode for related samples (use with `-P`)
+- `-t` Manual threshold (default: 0.95)
+
+**Output:** List of matched sample pairs with status and depth-dependent thresholds
+
+**Note:** The classifier uses depth-dependent thresholds following NGSCheckMate:
+- **depth > 10**: High confidence matching (stricter thresholds)
+- **depth 5-10**: Medium confidence
+- **depth 2-5**: Lower confidence  
+- **depth < 2**: Very low confidence (more lenient thresholds)
+
 ### Quick Start
 
 ```sh
 # Build the tools
-make snp-pattern-gen vaf-counter correlation-matrix
+make snp-pattern-gen vaf-counter correlation-matrix match-classifier
 
-# Run the pipeline
+# Run the complete pipeline
 ./snp-pattern-gen -k 21 -b dbSNP.bed -f hg38.fa -o patterns.txt
 ./vaf-counter -k 21 -p patterns.txt -o sample1.vaf sample1_R1.fq.gz sample1_R2.fq.gz
 ./vaf-counter -k 21 -p patterns.txt -o sample2.vaf sample2_R1.fq.gz sample2_R2.fq.gz
-./correlation-matrix -o correlation.corr -t sample1.vaf sample2.vaf
+./correlation-matrix -M matched -o correlation.corr sample1.vaf sample2.vaf
+./match-classifier -c correlation.corr -o matches.txt -P sample1.vaf sample2.vaf
 ```
 
 ### Applications

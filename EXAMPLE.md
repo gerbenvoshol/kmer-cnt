@@ -4,10 +4,11 @@ This document provides a step-by-step example of using the SNP k-mer analysis pi
 
 ## Overview
 
-The pipeline consists of three programs:
+The pipeline consists of four programs:
 1. `snp-pattern-gen` - Extracts unique k-mers from SNP positions
 2. `vaf-counter` - Counts k-mer occurrences in sequencing data
 3. `correlation-matrix` - Computes sample correlations
+4. `match-classifier` - Classifies matched samples with depth-dependent thresholds
 
 ## Step 1: Prepare Input Files
 
@@ -161,11 +162,61 @@ Cluster: sample1 (0.2750) <-> sample3 (0.2750)
 
 **Note on Depth Dependency:** Correlation values are depth-dependent. Low-coverage samples may return 0.0 correlation even if they are from the same individual, simply because there aren't enough SNPs with sufficient depth to calculate a reliable correlation. Always check that samples have adequate depth before interpreting low correlation values.
 
+## Step 5: Classify Matched Samples
+
+Use the match classifier to automatically identify which samples are matched (same individual):
+
+### Simple Threshold Mode
+```bash
+./match-classifier -c correlation.corr -o matches.txt -t 0.95
+```
+
+Output (`matches.txt`):
+```
+# Match classification with correlation threshold >= 0.9500
+Sample1	Sample2	Correlation	Status
+sample1	sample2	0.980000	MATCHED
+```
+
+### NGSCheckMate Predefined Model (Recommended)
+
+For more accurate classification using depth-dependent thresholds:
+
+```bash
+# Non-family mode (for unrelated samples)
+./match-classifier -c correlation.corr -o matches.txt -P \
+    sample1.vaf sample2.vaf sample3.vaf
+
+# Family mode (for related samples)
+./match-classifier -c correlation.corr -o matches_family.txt -P -F \
+    sample1.vaf sample2.vaf sample3.vaf
+```
+
+Output with depth-dependent thresholds (`matches.txt`):
+```
+# Match classification using NGSCheckMate predefined model (non-family mode)
+Sample1	Sample2	Depth1	Depth2	Correlation	Threshold	Status
+sample1	sample2	15.50	12.00	0.980000	0.5925	MATCHED
+sample1	sample3	15.50	3.00	0.450000	0.4448	MATCHED
+```
+
+**How it works:**
+- The classifier uses **depth-stratified thresholds** from NGSCheckMate
+- Higher depth samples require higher correlation to be matched (more confident)
+- Lower depth samples use lower thresholds (less confident, but still useful)
+- Family mode adjusts thresholds for related samples vs unrelated
+
+**Depth-dependent thresholds:**
+- **depth > 10**: High confidence (threshold ~0.87 non-family, ~0.78 family)
+- **depth 5-10**: Medium confidence
+- **depth 2-5**: Lower confidence  
+- **depth < 2**: Very low confidence (threshold ~0.53 non-family, ~0.58 family)
+
 ### Applications
-1. **Sample Mix-up Detection**: Verify that labeled samples match expected correlations
-2. **Contamination Detection**: Identify samples with unexpected VAF patterns
+1. **Sample Mix-up Detection**: Automatically identify mislabeled samples
+2. **Contamination Detection**: Identify samples with unexpected matches
 3. **Relatedness Estimation**: Determine family relationships between samples
-4. **Quality Control**: Ensure technical replicates show high correlation
+4. **Quality Control**: Verify technical replicates are correctly matched
 
 ## Performance Tips
 
