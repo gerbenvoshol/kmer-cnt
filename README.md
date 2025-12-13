@@ -1,15 +1,17 @@
 ## SNP K-mer Analysis Tools
 
-This repository includes four new C programs for SNP-based sample correlation analysis, inspired by [NGSCheckMate](https://github.com/parklab/NGSCheckMate):
+This repository includes six C programs for SNP-based sample correlation analysis, inspired by [NGSCheckMate](https://github.com/parklab/NGSCheckMate):
 
 ### Overview
 
-The pipeline consists of four programs:
+The pipeline consists of six programs:
 
 1. **snp-pattern-gen** - Extracts unique k-mers from SNP positions
-2. **vaf-counter** - Counts k-mer occurrences and calculates variant allele frequencies
-3. **correlation-matrix** - Computes Pearson correlation between samples
-4. **match-classifier** - Classifies matched samples using depth-dependent thresholds
+2. **vaf-counter** - Counts k-mer occurrences in FASTQ files and calculates variant allele frequencies
+3. **bam-vaf-counter** - Counts k-mer occurrences in BAM files (uses htslib)
+4. **vcf-vaf-counter** - Generates VAF files directly from VCF files (uses htslib)
+5. **correlation-matrix** - Computes Pearson correlation between samples
+6. **match-classifier** - Classifies matched samples using depth-dependent thresholds
 
 ### Usage
 
@@ -49,6 +51,42 @@ chr19	4945904	4945905	rs2250981	C	T
 **Output:** VAF file with variant allele frequencies and depth information
 
 **Performance:** vaf-counter uses multi-threaded k-mer counting similar to kc-c4.c, with a 3-stage pipeline (read sequences, extract k-mers, lookup k-mers) for optimal performance.
+
+#### 2b. Alternative: Count k-mers in BAM files
+
+For aligned sequencing data (BAM/SAM/CRAM files):
+
+```sh
+./bam-vaf-counter -k 21 -t 4 -p patterns.txt -o sample1.vaf sample1.bam
+```
+
+**Input:**
+- `-p` Pattern file from step 1
+- `-k` K-mer length (must match pattern generation)
+- `-t` Number of threads (default: 4)
+- One or more BAM/SAM/CRAM files
+
+**Output:** VAF file with variant allele frequencies and depth information
+
+**Note:** This program uses htslib to read BAM files and extracts k-mers from aligned reads, providing the same output format as vaf-counter.
+
+#### 2c. Alternative: Generate VAF from VCF files
+
+For variant call data (VCF/BCF files):
+
+```sh
+./vcf-vaf-counter -p patterns.txt -v sample1.vcf.gz -o sample1.vaf -s 0 -d 5
+```
+
+**Input:**
+- `-p` Pattern file from step 1
+- `-v` VCF or BCF file (can be compressed)
+- `-s` Sample index (0-based) for multi-sample VCF [default: 0]
+- `-d` Minimum depth filter [default: 1]
+
+**Output:** VAF file with variant allele frequencies and depth information
+
+**Note:** This program uses htslib to read VCF files and extracts genotype (GT) and allele depth (AD) or depth (DP) information. If AD is available, it uses actual allele counts; otherwise, it estimates from DP and genotype. This is useful when you already have called variants and want to skip the k-mer counting step.
 
 #### 3. Compute correlation matrix
 
@@ -109,15 +147,23 @@ chr19	4945904	4945905	rs2250981	C	T
 ### Quick Start
 
 ```sh
-# Build the tools
-make snp-pattern-gen vaf-counter correlation-matrix match-classifier
+# Build the tools (includes htslib)
+make snp-pattern-gen vaf-counter bam-vaf-counter vcf-vaf-counter correlation-matrix match-classifier
 
-# Run the complete pipeline
+# Run the complete pipeline with FASTQ files
 ./snp-pattern-gen -k 21 -b dbSNP.bed -f hg38.fa -o patterns.txt
 ./vaf-counter -k 21 -p patterns.txt -o sample1.vaf sample1_R1.fq.gz sample1_R2.fq.gz
 ./vaf-counter -k 21 -p patterns.txt -o sample2.vaf sample2_R1.fq.gz sample2_R2.fq.gz
 ./correlation-matrix -M matched -o correlation.corr sample1.vaf sample2.vaf
 ./match-classifier -c correlation.corr -o matches.txt -P sample1.vaf sample2.vaf
+
+# Or use BAM files instead
+./bam-vaf-counter -k 21 -p patterns.txt -o sample1.vaf sample1.bam
+./bam-vaf-counter -k 21 -p patterns.txt -o sample2.vaf sample2.bam
+
+# Or use VCF files directly
+./vcf-vaf-counter -p patterns.txt -v sample1.vcf.gz -o sample1.vaf -s 0
+./vcf-vaf-counter -p patterns.txt -v sample2.vcf.gz -o sample2.vaf -s 0
 ```
 
 ### Applications

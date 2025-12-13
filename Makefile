@@ -2,7 +2,10 @@ CFLAGS=-g -Wall -O2
 CXXFLAGS=$(CFLAGS) -std=c++11
 LIBS=-lz
 MATHLIBS=-lm
-PROG=kc-c1 kc-c2 kc-c3 kc-c4 kc-cpp1 kc-cpp2 yak-count snp-pattern-gen vaf-counter correlation-matrix match-classifier
+HTSLIB=htslib/libhts.a
+HTSINC=-Ihtslib
+HTSLIBS=$(HTSLIB) -lz -lm -lpthread
+PROG=kc-c1 kc-c2 kc-c3 kc-c4 kc-cpp1 kc-cpp2 yak-count snp-pattern-gen vaf-counter correlation-matrix match-classifier bam-vaf-counter vcf-vaf-counter
 
 ifneq ($(asan),)
 	CFLAGS+=-fsanitize=address
@@ -46,5 +49,15 @@ correlation-matrix:correlation-matrix.c ketopt.h
 match-classifier:match-classifier.c ketopt.h
 	$(CC) $(CFLAGS) -o $@ $< $(MATHLIBS)
 
+$(HTSLIB):
+	cd htslib && ./configure --disable-bz2 --disable-lzma && $(MAKE) lib-static
+
+bam-vaf-counter:bam-vaf-counter.c khashl.h ketopt.h kthread.h $(HTSLIB)
+	$(CC) $(CFLAGS) $(HTSINC) -o $@ bam-vaf-counter.c kthread.c $(HTSLIBS)
+
+vcf-vaf-counter:vcf-vaf-counter.c ketopt.h $(HTSLIB)
+	$(CC) $(CFLAGS) $(HTSINC) -o $@ vcf-vaf-counter.c $(HTSLIBS)
+
 clean:
 	rm -fr *.dSYM $(PROG)
+	cd htslib && $(MAKE) clean 2>/dev/null || true
