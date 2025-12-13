@@ -58,6 +58,10 @@ chr1	152308305	152308306	rs2184953	T	C	GCTAGCTAGCTAGCTAGCTA	GCTAGCTAGCAAGCTAGCTA
 
 ## Step 3: Count K-mers in Sequencing Data
 
+You have three options for generating VAF files, depending on your input data:
+
+### Option A: From FASTQ files (unaligned reads)
+
 For each sample, count occurrences of reference and alternative k-mers:
 
 ```bash
@@ -84,7 +88,57 @@ Options:
 
 **Performance Note:** vaf-counter uses multi-threading to parallelize k-mer counting, similar to kc-c4.c. The `-t` option controls the number of worker threads used for k-mer lookup operations.
 
-Output example (`sample1.vaf`):
+### Option B: From BAM files (aligned reads)
+
+For aligned sequencing data, use bam-vaf-counter with htslib:
+
+```bash
+# Sample 1
+./bam-vaf-counter -k 21 -t 4 -p patterns.txt -o sample1.vaf sample1.bam
+
+# Sample 2
+./bam-vaf-counter -k 21 -t 4 -p patterns.txt -o sample2.vaf sample2.bam
+
+# Sample 3
+./bam-vaf-counter -k 21 -t 4 -p patterns.txt -o sample3.vaf sample3.bam
+```
+
+Options:
+- `-k 21`: K-mer length (must match pattern generation)
+- `-p patterns.txt`: Pattern file from step 2
+- `-o sample1.vaf`: Output VAF file
+- `-t 4`: Number of threads (default: 4)
+
+**Note:** This tool reads BAM/SAM/CRAM files using htslib and extracts k-mers from aligned reads. The output format is identical to vaf-counter.
+
+### Option C: From VCF files (variant calls)
+
+If you already have called variants with genotype information, use vcf-vaf-counter:
+
+```bash
+# Sample 1 (first sample in VCF)
+./vcf-vaf-counter -p patterns.txt -v sample1.vcf.gz -o sample1.vaf -s 0 -d 5
+
+# Sample 2 (second sample in VCF, if multi-sample)
+./vcf-vaf-counter -p patterns.txt -v samples.vcf.gz -o sample2.vaf -s 1 -d 5
+
+# Sample 3 (third sample in VCF)
+./vcf-vaf-counter -p patterns.txt -v samples.vcf.gz -o sample3.vaf -s 2 -d 5
+```
+
+Options:
+- `-p patterns.txt`: Pattern file from step 2
+- `-v sample1.vcf.gz`: Input VCF/BCF file (can be compressed)
+- `-o sample1.vaf`: Output VAF file
+- `-s 0`: Sample index (0-based) for multi-sample VCF [default: 0]
+- `-d 5`: Minimum depth filter [default: 1]
+
+**Note:** This tool reads VCF files using htslib and extracts genotype (GT) and allele depth (AD or DP) information. If AD is available, it uses actual allele counts; otherwise, it estimates from DP and genotype.
+
+### Output Format
+
+All three methods produce the same VAF file format:
+
 ```
 # Average depth: 25.50
 CHR	POS	RSID	REF	ALT	REF_COUNT	ALT_COUNT	TOTAL_COUNT	VAF
