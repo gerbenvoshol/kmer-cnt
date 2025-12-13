@@ -20,6 +20,7 @@ _codeql_detected_source_root
 # htslib build artifacts
 htslib/config.h
 htslib/config.mk
+htslib/config.log
 htslib/config_vars.h
 htslib/htscodecs.mk
 htslib/htslib.pc.tmp
