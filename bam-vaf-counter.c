@@ -474,12 +474,21 @@ void count_bam_kmers(const char *fn, int k, int n_thread,
 	
 	// Load BAM index for random access
 	pl.idx = sam_index_load(pl.fp, fn);
-	if (!pl.idx) {
-		fprintf(stderr, "[M::%s] Warning: failed to load BAM index for %s, processing all reads\n", __func__, fn);
+	if (!pl.idx || !regions) {
+		if (!pl.idx) {
+			fprintf(stderr, "[M::%s] Warning: failed to load BAM index for %s, processing all reads\n", __func__, fn);
+		}
+		if (!regions) {
+			fprintf(stderr, "[M::%s] Warning: no target regions available, processing all reads\n", __func__);
+		}
 		// Fall back to sequential processing without index
 		pl.regions = NULL;
 		pl.itr = NULL;
 		pl.curr_region = 0;
+		if (pl.idx) {
+			hts_idx_destroy(pl.idx);
+			pl.idx = NULL;
+		}
 	} else {
 		fprintf(stderr, "[M::%s] Using indexed access to fetch reads from %d target regions\n", __func__, regions->n);
 		pl.regions = regions;
