@@ -21,7 +21,6 @@
 
 #include "htslib/htslib/sam.h"
 #include "htslib/htslib/hts.h"
-#include "htslib/htslib/hts_log.h"
 
 #include "khashl.h"
 KHASHL_MAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kh_hash_uint64, kh_eq_generic)
@@ -161,12 +160,24 @@ void pattern_db_destroy(pattern_db_t *db)
 	}
 }
 
+// Comparison function for qsort
+static int region_cmp(const void *a, const void *b)
+{
+	const region_t *ra = (const region_t*)a;
+	const region_t *rb = (const region_t*)b;
+	int cmp = strcmp(ra->chr, rb->chr);
+	if (cmp != 0) return cmp;
+	return ra->start - rb->start;
+}
+
 // Build region list from pattern database
 // Merges overlapping regions to minimize redundant reads
 region_list_t *build_regions(pattern_db_t *db, int k)
 {
 	region_list_t *regions;
-	int i, j;
+	int i;
+	
+	if (!db || db->n <= 0) return 0;
 	
 	regions = (region_list_t*)calloc(1, sizeof(region_list_t));
 	if (!regions) return 0;
@@ -189,24 +200,15 @@ region_list_t *build_regions(pattern_db_t *db, int k)
 	}
 	regions->n = db->n;
 	
-	// Sort regions by chromosome and start position (simple bubble sort for now)
-	for (i = 0; i < regions->n - 1; ++i) {
-		for (j = i + 1; j < regions->n; ++j) {
-			int cmp = strcmp(regions->a[i].chr, regions->a[j].chr);
-			if (cmp > 0 || (cmp == 0 && regions->a[i].start > regions->a[j].start)) {
-				region_t tmp = regions->a[i];
-				regions->a[i] = regions->a[j];
-				regions->a[j] = tmp;
-			}
-		}
-	}
+	// Sort regions by chromosome and start position using qsort
+	qsort(regions->a, regions->n, sizeof(region_t), region_cmp);
 	
-	// Merge overlapping regions on same chromosome
+	// Merge overlapping or adjacent regions on same chromosome
 	int write_idx = 0;
 	for (i = 1; i < regions->n; ++i) {
 		if (strcmp(regions->a[write_idx].chr, regions->a[i].chr) == 0 &&
-		    regions->a[write_idx].end >= regions->a[i].start) {
-			// Merge overlapping regions
+		    regions->a[write_idx].end + 1 >= regions->a[i].start) {
+			// Merge overlapping or adjacent regions
 			if (regions->a[i].end > regions->a[write_idx].end) {
 				regions->a[write_idx].end = regions->a[i].end;
 			}
