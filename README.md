@@ -70,6 +70,8 @@ For aligned sequencing data (BAM/SAM/CRAM files):
 
 **Note:** This program uses htslib to read BAM files and extracts k-mers from aligned reads, providing the same output format as vaf-counter.
 
+**Performance Optimization:** bam-vaf-counter uses indexed BAM access (requires .bai index file) to fetch only reads overlapping SNP positions, dramatically improving performance compared to sequential processing of all reads. Regions are automatically merged to minimize redundant fetching. If no BAM index is available, the program falls back to sequential processing with a warning.
+
 #### 2c. Alternative: Generate VAF from VCF files
 
 For variant call data (VCF/BCF files):
