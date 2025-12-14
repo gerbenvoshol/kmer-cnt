@@ -93,6 +93,11 @@ Options:
 For aligned sequencing data, use bam-vaf-counter with htslib:
 
 ```bash
+# Index BAM files first (if not already indexed) for optimal performance
+samtools index sample1.bam
+samtools index sample2.bam
+samtools index sample3.bam
+
 # Sample 1
 ./bam-vaf-counter -k 21 -t 4 -p patterns.txt -o sample1.vaf sample1.bam
 
@@ -110,6 +115,8 @@ Options:
 - `-t 4`: Number of threads (default: 4)
 
 **Note:** This tool reads BAM/SAM/CRAM files using htslib and extracts k-mers from aligned reads. The output format is identical to vaf-counter.
+
+**Performance:** bam-vaf-counter is optimized to use indexed BAM access (requires .bai file) to fetch only reads from SNP regions instead of processing all reads. This provides significant speedup (potentially 100x-1000x faster) when working with large BAM files. Make sure your BAM files are indexed with `samtools index` before running bam-vaf-counter for best performance.
 
 ### Option C: From VCF files (variant calls)
 

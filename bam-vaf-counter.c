@@ -3,6 +3,12 @@
  * 
  * This program reads aligned sequencing data from BAM files and counts
  * reference and alternative k-mers from a pattern file to generate VAF files.
+ * 
+ * OPTIMIZATION: Uses indexed BAM access to fetch only reads overlapping SNP
+ * positions, dramatically reducing the number of reads processed compared to
+ * sequential scanning. Regions are extracted from the pattern file and merged
+ * to minimize redundant reads. Falls back to sequential reading if BAM index
+ * (.bai) is not available.
  */
 
 #include <stdio.h>
@@ -63,6 +69,18 @@ typedef struct {
 	int n, m;
 	uint64_t *a;
 } kmer_buf_t;
+
+// Region for targeted BAM reading
+typedef struct {
+	char chr[256];
+	int start;
+	int end;
+} region_t;
+
+typedef struct {
+	int n, m;
+	region_t *a;
+} region_list_t;
 
 // Encode k-mer to 64-bit integer
 uint64_t encode_kmer(const char *seq, int k)
@@ -142,6 +160,82 @@ void pattern_db_destroy(pattern_db_t *db)
 	}
 }
 
+// Comparison function for qsort
+static int region_cmp(const void *a, const void *b)
+{
+	const region_t *ra = (const region_t*)a;
+	const region_t *rb = (const region_t*)b;
+	int cmp = strcmp(ra->chr, rb->chr);
+	if (cmp != 0) return cmp;
+	return ra->start - rb->start;
+}
+
+// Build region list from pattern database
+// Merges overlapping regions to minimize redundant reads
+region_list_t *build_regions(pattern_db_t *db, int k)
+{
+	region_list_t *regions;
+	int i;
+	
+	if (!db || db->n <= 0) return 0;
+	
+	regions = (region_list_t*)calloc(1, sizeof(region_list_t));
+	if (!regions) return 0;
+	
+	// Allocate space for regions
+	regions->m = db->n;
+	regions->a = (region_t*)malloc(regions->m * sizeof(region_t));
+	if (!regions->a) {
+		free(regions);
+		return 0;
+	}
+	
+	// Create initial regions with flanking bases
+	// To capture all k-mers that include the SNP position, we extend k-1 bases
+	// in each direction (a k-mer starting k-1 bases before SNP can include it)
+	for (i = 0; i < db->n; ++i) {
+		strncpy(regions->a[i].chr, db->a[i].chr, sizeof(regions->a[i].chr) - 1);
+		regions->a[i].chr[sizeof(regions->a[i].chr) - 1] = '\0';
+		regions->a[i].start = db->a[i].start - k + 1;
+		if (regions->a[i].start < 0) regions->a[i].start = 0;
+		regions->a[i].end = db->a[i].end + k - 1;
+	}
+	regions->n = db->n;
+	
+	// Sort regions by chromosome and start position using qsort
+	qsort(regions->a, regions->n, sizeof(region_t), region_cmp);
+	
+	// Merge overlapping or adjacent regions on same chromosome
+	// Adjacent regions (where end+1 == start) are also merged to minimize queries
+	int write_idx = 0;
+	for (i = 1; i < regions->n; ++i) {
+		if (strcmp(regions->a[write_idx].chr, regions->a[i].chr) == 0 &&
+		    regions->a[write_idx].end + 1 >= regions->a[i].start) {
+			// Merge overlapping or adjacent (touching) regions
+			if (regions->a[i].end > regions->a[write_idx].end) {
+				regions->a[write_idx].end = regions->a[i].end;
+			}
+		} else {
+			// Non-overlapping, move to next position
+			++write_idx;
+			if (write_idx != i) {
+				regions->a[write_idx] = regions->a[i];
+			}
+		}
+	}
+	regions->n = write_idx + 1;
+	
+	return regions;
+}
+
+void region_list_destroy(region_list_t *regions)
+{
+	if (regions) {
+		free(regions->a);
+		free(regions);
+	}
+}
+
 // Create hash table mapping k-mer to pattern index
 kmer_cnt_t *create_kmer_map(pattern_db_t *db, int k, int is_ref)
 {
@@ -195,9 +289,13 @@ typedef struct {
 	int k, n_thread;
 	samFile *fp;
 	sam_hdr_t *hdr;
+	hts_idx_t *idx;
+	hts_itr_t *itr;
 	kmer_cnt_t *ref_map;
 	kmer_cnt_t *alt_map;
 	pattern_db_t *db;
+	region_list_t *regions;
+	int curr_region;
 } pipeline_t;
 
 // Data for each pipeline step
@@ -235,7 +333,7 @@ static void *worker_pipeline(void *data, int step, void *in)
 {
 	pipeline_t *p = (pipeline_t*)data;
 	
-	if (step == 0) { // Step 1: read BAM records
+	if (step == 0) { // Step 1: read BAM records from regions
 		step_t *s;
 		bam1_t *b;
 		int ret, batch_size = 1000;
@@ -245,14 +343,61 @@ static void *worker_pipeline(void *data, int step, void *in)
 		s->m = batch_size;
 		s->bam_recs = (bam1_t**)malloc(batch_size * sizeof(bam1_t*));
 		
-		for (s->n = 0; s->n < batch_size; ++s->n) {
-			b = bam_init1();
-			ret = sam_read1(p->fp, p->hdr, b);
-			if (ret < 0) {
-				bam_destroy1(b);
-				break;
+		// If regions available, use indexed access; otherwise fall back to sequential
+		if (p->regions && p->idx) {
+			// Read from current iterator or move to next region
+			for (s->n = 0; s->n < batch_size; ++s->n) {
+				b = bam_init1();
+				
+				// Try to read from current iterator
+				while (1) {
+					if (p->itr) {
+						ret = sam_itr_next(p->fp, p->itr, b);
+						if (ret >= 0) break; // Got a read
+						// Current region exhausted, move to next
+						hts_itr_destroy(p->itr);
+						p->itr = NULL;
+					}
+					
+					// Move to next region
+					if (p->curr_region >= p->regions->n) {
+						// All regions processed
+						ret = -1;
+						break;
+					}
+					
+					region_t *r = &p->regions->a[p->curr_region++];
+					int tid = sam_hdr_name2tid(p->hdr, r->chr);
+					if (tid < 0) {
+						fprintf(stderr, "Warning: chromosome %s not found in BAM\n", r->chr);
+						continue;
+					}
+					
+					p->itr = sam_itr_queryi(p->idx, tid, r->start, r->end);
+					if (!p->itr) {
+						fprintf(stderr, "Warning: failed to create iterator for %s:%d-%d\n",
+						        r->chr, r->start, r->end);
+						continue;
+					}
+				}
+				
+				if (ret < 0) {
+					bam_destroy1(b);
+					break;
+				}
+				s->bam_recs[s->n] = b;
 			}
-			s->bam_recs[s->n] = b;
+		} else {
+			// Fall back to sequential reading (original behavior)
+			for (s->n = 0; s->n < batch_size; ++s->n) {
+				b = bam_init1();
+				ret = sam_read1(p->fp, p->hdr, b);
+				if (ret < 0) {
+					bam_destroy1(b);
+					break;
+				}
+				s->bam_recs[s->n] = b;
+			}
 		}
 		
 		if (s->n == 0) {
@@ -312,7 +457,8 @@ static void *worker_pipeline(void *data, int step, void *in)
 
 // Count k-mers in BAM file with multi-threading
 void count_bam_kmers(const char *fn, int k, int n_thread,
-                     kmer_cnt_t *ref_map, kmer_cnt_t *alt_map, pattern_db_t *db)
+                     kmer_cnt_t *ref_map, kmer_cnt_t *alt_map, pattern_db_t *db,
+                     region_list_t *regions)
 {
 	pipeline_t pl;
 	
@@ -329,6 +475,30 @@ void count_bam_kmers(const char *fn, int k, int n_thread,
 		return;
 	}
 	
+	// Load BAM index for random access
+	pl.idx = sam_index_load(pl.fp, fn);
+	if (!pl.idx || !regions) {
+		if (!pl.idx) {
+			fprintf(stderr, "[M::%s] Warning: failed to load BAM index for %s, processing all reads\n", __func__, fn);
+		}
+		if (!regions) {
+			fprintf(stderr, "[M::%s] Warning: no target regions available, processing all reads\n", __func__);
+		}
+		// Fall back to sequential processing without index
+		pl.regions = NULL;
+		pl.itr = NULL;
+		pl.curr_region = 0;
+		if (pl.idx) {
+			hts_idx_destroy(pl.idx);
+			pl.idx = NULL;
+		}
+	} else {
+		fprintf(stderr, "[M::%s] Using indexed access to fetch reads from %d target regions\n", __func__, regions->n);
+		pl.regions = regions;
+		pl.itr = NULL;
+		pl.curr_region = 0;
+	}
+	
 	pl.k = k;
 	pl.n_thread = n_thread;
 	pl.ref_map = ref_map;
@@ -337,6 +507,8 @@ void count_bam_kmers(const char *fn, int k, int n_thread,
 	
 	kt_pipeline(3, worker_pipeline, &pl, 3);
 	
+	if (pl.itr) hts_itr_destroy(pl.itr);
+	if (pl.idx) hts_idx_destroy(pl.idx);
 	sam_hdr_destroy(pl.hdr);
 	sam_close(pl.fp);
 }
@@ -381,10 +553,18 @@ int main(int argc, char *argv[])
 	ref_map = create_kmer_map(db, k, 1);
 	alt_map = create_kmer_map(db, k, 0);
 	
+	fprintf(stderr, "[M::%s] Building target regions from patterns...\n", __func__);
+	region_list_t *regions = build_regions(db, k);
+	if (!regions) {
+		fprintf(stderr, "Error: failed to build regions\n");
+		return 1;
+	}
+	fprintf(stderr, "[M::%s] Built %d target regions (merged from %d patterns)\n", __func__, regions->n, db->n);
+	
 	fprintf(stderr, "[M::%s] Counting k-mers in BAM files with %d threads...\n", __func__, n_thread);
 	for (i = o.ind; i < argc; ++i) {
 		fprintf(stderr, "[M::%s] Processing %s...\n", __func__, argv[i]);
-		count_bam_kmers(argv[i], k, n_thread, ref_map, alt_map, db);
+		count_bam_kmers(argv[i], k, n_thread, ref_map, alt_map, db, regions);
 	}
 	
 	// Calculate total counts
@@ -416,6 +596,7 @@ int main(int argc, char *argv[])
 	fclose(out_fp);
 	fprintf(stderr, "[M::%s] Done. Average depth: %.2f\n", __func__, avg_depth);
 	
+	region_list_destroy(regions);
 	kmer_cnt_destroy(ref_map);
 	kmer_cnt_destroy(alt_map);
 	pattern_db_destroy(db);

@@ -612,7 +612,7 @@ configure:5639: $? = 0
 configure:5639: result: yes
 configure:5645: checking for srand48_deterministic
 configure:5645: gcc -o conftest  -Wall -g -O2 -fvisibility=hidden   -fvisibility=hidden conftest.c  >&5
-/usr/bin/ld: /tmp/cc8Q3YGt.o: in function `main':
+/usr/bin/ld: /tmp/ccYKmEkM.o: in function `main':
 /home/runner/work/kmer-cnt/kmer-cnt/htslib/conftest.c:65:(.text.startup+0x9): undefined reference to `srand48_deterministic'
 collect2: error: ld returned 1 exit status
 configure:5645: $? = 1
@@ -709,7 +709,7 @@ conftest.c:51:6: warning: conflicting types for built-in function 'log'; expecte
       |      ^~~
 conftest.c:1:1: note: 'log' is declared in header '<math.h>'
     1 | /* confdefs.h */
-/usr/bin/ld: /tmp/ccCiEhCd.o: in function `main':
+/usr/bin/ld: /tmp/ccdDapEc.o: in function `main':
 /home/runner/work/kmer-cnt/kmer-cnt/htslib/conftest.c:55:(.text.startup+0x9): undefined reference to `log'
 collect2: error: ld returned 1 exit status
 configure:5907: $? = 1
@@ -1125,6 +1125,7 @@ on runnervm6qbrg
 config.status:863: creating config.mk
 config.status:863: creating htslib.pc.tmp
 config.status:863: creating config.h
+config.status:1033: config.h is unchanged
 config.status:1059: linking htscodecs_bundled.mk to htscodecs.mk
 
 ## ---------------- ##
