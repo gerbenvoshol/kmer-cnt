@@ -53,10 +53,10 @@ $(HTSLIB):
 	cd htslib && ./configure --disable-bz2 --disable-lzma && $(MAKE) lib-static
 
 bam-vaf-counter:bam-vaf-counter.c khashl.h ketopt.h kthread.h $(HTSLIB)
-	$(CC) $(CFLAGS) $(HTSINC) -o $@ bam-vaf-counter.c kthread.c $(HTSLIBS)
+	$(CC) $(CFLAGS) $(HTSINC) -o $@ bam-vaf-counter.c kthread.c $(HTSLIBS) -lcurl -lcrypto -ldeflate
 
 vcf-vaf-counter:vcf-vaf-counter.c ketopt.h $(HTSLIB)
-	$(CC) $(CFLAGS) $(HTSINC) -o $@ vcf-vaf-counter.c $(HTSLIBS)
+	$(CC) $(CFLAGS) $(HTSINC) -o $@ vcf-vaf-counter.c $(HTSLIBS) -lcurl -lcrypto -ldeflate
 
 clean:
 	rm -fr *.dSYM $(PROG)
