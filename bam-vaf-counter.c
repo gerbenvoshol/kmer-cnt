@@ -3,6 +3,12 @@
  * 
  * This program reads aligned sequencing data from BAM files and counts
  * reference and alternative k-mers from a pattern file to generate VAF files.
+ * 
+ * OPTIMIZATION: Uses indexed BAM access to fetch only reads overlapping SNP
+ * positions, dramatically reducing the number of reads processed compared to
+ * sequential scanning. Regions are extracted from the pattern file and merged
+ * to minimize redundant reads. Falls back to sequential reading if BAM index
+ * (.bai) is not available.
  */
 
 #include <stdio.h>
@@ -467,12 +473,13 @@ void count_bam_kmers(const char *fn, int k, int n_thread,
 	// Load BAM index for random access
 	pl.idx = sam_index_load(pl.fp, fn);
 	if (!pl.idx) {
-		fprintf(stderr, "Warning: failed to load BAM index for %s, processing all reads\n", fn);
+		fprintf(stderr, "[M::%s] Warning: failed to load BAM index for %s, processing all reads\n", __func__, fn);
 		// Fall back to sequential processing without index
 		pl.regions = NULL;
 		pl.itr = NULL;
 		pl.curr_region = 0;
 	} else {
+		fprintf(stderr, "[M::%s] Using indexed access to fetch reads from %d target regions\n", __func__, regions->n);
 		pl.regions = regions;
 		pl.itr = NULL;
 		pl.curr_region = 0;
