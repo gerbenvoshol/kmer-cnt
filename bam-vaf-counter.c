@@ -191,9 +191,11 @@ region_list_t *build_regions(pattern_db_t *db, int k)
 	}
 	
 	// Create initial regions with flanking bases
-	// Each k-mer spans k bases, so we need to read k-1 bases on each side of SNP
+	// To capture all k-mers that include the SNP position, we extend k-1 bases
+	// in each direction (a k-mer starting k-1 bases before SNP can include it)
 	for (i = 0; i < db->n; ++i) {
-		strcpy(regions->a[i].chr, db->a[i].chr);
+		strncpy(regions->a[i].chr, db->a[i].chr, sizeof(regions->a[i].chr) - 1);
+		regions->a[i].chr[sizeof(regions->a[i].chr) - 1] = '\0';
 		regions->a[i].start = db->a[i].start - k + 1;
 		if (regions->a[i].start < 0) regions->a[i].start = 0;
 		regions->a[i].end = db->a[i].end + k - 1;
@@ -204,11 +206,12 @@ region_list_t *build_regions(pattern_db_t *db, int k)
 	qsort(regions->a, regions->n, sizeof(region_t), region_cmp);
 	
 	// Merge overlapping or adjacent regions on same chromosome
+	// Adjacent regions (where end+1 == start) are also merged to minimize queries
 	int write_idx = 0;
 	for (i = 1; i < regions->n; ++i) {
 		if (strcmp(regions->a[write_idx].chr, regions->a[i].chr) == 0 &&
 		    regions->a[write_idx].end + 1 >= regions->a[i].start) {
-			// Merge overlapping or adjacent regions
+			// Merge overlapping or adjacent (touching) regions
 			if (regions->a[i].end > regions->a[write_idx].end) {
 				regions->a[write_idx].end = regions->a[i].end;
 			}
