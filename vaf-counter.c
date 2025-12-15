@@ -137,10 +137,12 @@ void pattern_db_destroy(pattern_db_t *db)
 
 // Create combined hash table mapping k-mer to (pattern_index << 1) | is_alt
 // This allows both ref and alt k-mers in a single map
+// Note: Assumes k-mers are unique (each k-mer appears in only one pattern)
+// This should be guaranteed by snp-pattern-gen which filters for uniqueness
 kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 {
 	kmer_cnt_t *h;
-	int i, absent;
+	int i, absent, n_collisions = 0;
 	khint_t itr;
 	
 	h = kmer_cnt_init();
@@ -157,7 +159,11 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 		if (kmer != UINT64_MAX) {
 			uint64_t can = canonical_kmer(kmer, k);
 			itr = kmer_cnt_put(h, can, &absent);
-			if (absent) kh_val(h, itr) = (i << 1) | 0; // pattern index, is_ref=0
+			if (absent) {
+				kh_val(h, itr) = (i << 1) | 0; // pattern index, is_ref=0
+			} else {
+				++n_collisions;
+			}
 		}
 		
 		// Add alternative k-mer
@@ -165,8 +171,17 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 		if (kmer != UINT64_MAX) {
 			uint64_t can = canonical_kmer(kmer, k);
 			itr = kmer_cnt_put(h, can, &absent);
-			if (absent) kh_val(h, itr) = (i << 1) | 1; // pattern index, is_alt=1
+			if (absent) {
+				kh_val(h, itr) = (i << 1) | 1; // pattern index, is_alt=1
+			} else {
+				++n_collisions;
+			}
 		}
+	}
+	
+	if (n_collisions > 0) {
+		fprintf(stderr, "[W::%s] Warning: %d k-mer collisions detected. "
+		        "Some patterns may have overlapping k-mers.\n", __func__, n_collisions);
 	}
 	
 	return h;
