@@ -10,7 +10,22 @@
 KSEQ_INIT(gzFile, gzread)
 
 #include "khashl.h"
-KHASHL_MAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kh_hash_uint64, kh_eq_generic)
+
+// Fast hash function for k-mers
+// K-mers are already well-distributed due to canonical representation,
+// so we can use a simple multiplicative hash instead of the complex kh_hash_uint64
+static inline khint_t kmer_hash(uint64_t key) {
+	// Simple multiplicative hash with good avalanche properties
+	// Uses MurmurHash3-inspired finalizer for fast mixing
+	key ^= key >> 33;
+	key *= 0xff51afd7ed558ccdULL;
+	key ^= key >> 33;
+	return (khint_t)key;
+}
+
+// Use cached hash variant for better performance during collision resolution
+// This stores the hash value in each bucket to avoid recomputing during probing
+KHASHL_CMAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kmer_hash, kh_eq_generic)
 
 #define KMER_BUF_GROWTH_FACTOR 1.2
 #define KMER_REF_FLAG 0  // Flag for reference k-mer in combined map
@@ -158,7 +173,7 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 	// Pre-allocate hash table to avoid frequent resizing
 	// We'll have 2 k-mers per pattern (ref and alt)
 	// Allocate db->n * 3 to provide sufficient space with typical hash table load factors
-	kmer_cnt_m_resize(h, db->n * 3);
+	kmer_cnt_cm_resize(h, db->n * 3);
 	
 	for (i = 0; i < db->n; ++i) {
 		uint64_t kmer;
@@ -209,9 +224,16 @@ static void extract_kmers_to_buf(kmer_buf_t *buf, int k, int len, const char *se
 			x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;
 			if (++l >= k) {
 				uint64_t y = x[0] < x[1] ? x[0] : x[1];
-				if (buf->n == buf->m) {
-					buf->m = buf->m < 8 ? 8 : buf->m + (buf->m >> 1);
-					buf->a = (uint64_t*)realloc(buf->a, buf->m * sizeof(uint64_t));
+				// Ensure buffer has space; use branch hint since reallocation is rare
+				if (__builtin_expect(buf->n == buf->m, 0)) {
+					int new_m = buf->m < 8 ? 8 : buf->m + (buf->m >> 1);
+					uint64_t *new_a = (uint64_t*)realloc(buf->a, new_m * sizeof(uint64_t));
+					if (!new_a) {
+						// Realloc failed; keep existing buffer but stop adding k-mers
+						return;
+					}
+					buf->a = new_a;
+					buf->m = new_m;
 				}
 				buf->a[buf->n++] = y;
 			}

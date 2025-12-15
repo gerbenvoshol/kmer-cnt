@@ -24,6 +24,7 @@ htslib/config.log
 htslib/config_vars.h
 htslib/htscodecs.mk
 htslib/htslib.pc.tmp
+htslib/version.h
 htslib/*.o
 htslib/cram/*.o
 htslib/htscodecs/**/*.o
