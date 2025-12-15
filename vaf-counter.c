@@ -145,6 +145,13 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 	int i, absent, n_collisions = 0;
 	khint_t itr;
 	
+	// Check for pattern index overflow (max index that can be safely encoded)
+	if (db->n > (INT32_MAX >> 1)) {
+		fprintf(stderr, "Error: too many patterns (%d), maximum is %d\n", 
+		        db->n, INT32_MAX >> 1);
+		return NULL;
+	}
+	
 	h = kmer_cnt_init();
 	// Pre-allocate hash table to avoid frequent resizing
 	// We'll have 2 k-mers per pattern (ref and alt), so allocate enough
@@ -379,6 +386,11 @@ int main(int argc, char *argv[])
 	
 	fprintf(stderr, "[M::%s] Creating k-mer map...\n", __func__);
 	kmer_map = create_combined_kmer_map(db, k);
+	if (!kmer_map) {
+		fprintf(stderr, "Error: failed to create k-mer map\n");
+		pattern_db_destroy(db);
+		return 1;
+	}
 	
 	fprintf(stderr, "[M::%s] Counting k-mers in FASTQ files with %d threads...\n", __func__, n_thread);
 	for (i = o.ind; i < argc; ++i) {
