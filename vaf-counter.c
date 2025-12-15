@@ -16,7 +16,7 @@ KSEQ_INIT(gzFile, gzread)
 // so we can use a simple multiplicative hash instead of the complex kh_hash_uint64
 static inline khint_t kmer_hash(uint64_t key) {
 	// Simple multiplicative hash with good avalanche properties
-	// Uses the golden ratio constant for better distribution
+	// Uses MurmurHash3-inspired finalizer for fast mixing
 	key ^= key >> 33;
 	key *= 0xff51afd7ed558ccdULL;
 	key ^= key >> 33;
@@ -223,8 +223,8 @@ static void extract_kmers_to_buf(kmer_buf_t *buf, int k, int len, const char *se
 			x[0] = (x[0] << 2 | c) & mask;
 			x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;
 			if (++l >= k) {
-				// Ensure buffer has space (check is outside of hot path now)
-				if (__builtin_expect(buf->n >= buf->m, 0)) {
+				// Ensure buffer has space; use branch hint since reallocation is rare
+				if (__builtin_expect(buf->n == buf->m, 0)) {
 					buf->m = buf->m < 8 ? 8 : buf->m + (buf->m >> 1);
 					buf->a = (uint64_t*)realloc(buf->a, buf->m * sizeof(uint64_t));
 				}
