@@ -10,9 +10,22 @@
 KSEQ_INIT(gzFile, gzread)
 
 #include "khashl.h"
+
+// Fast hash function for k-mers
+// K-mers are already well-distributed due to canonical representation,
+// so we can use a simple multiplicative hash instead of the complex kh_hash_uint64
+static inline khint_t kmer_hash(uint64_t key) {
+	// Simple multiplicative hash with good avalanche properties
+	// Uses the golden ratio constant for better distribution
+	key ^= key >> 33;
+	key *= 0xff51afd7ed558ccdULL;
+	key ^= key >> 33;
+	return (khint_t)key;
+}
+
 // Use cached hash variant for better performance during collision resolution
 // This stores the hash value in each bucket to avoid recomputing during probing
-KHASHL_CMAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kh_hash_uint64, kh_eq_generic)
+KHASHL_CMAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kmer_hash, kh_eq_generic)
 
 #define KMER_BUF_GROWTH_FACTOR 1.2
 #define KMER_REF_FLAG 0  // Flag for reference k-mer in combined map
@@ -210,11 +223,12 @@ static void extract_kmers_to_buf(kmer_buf_t *buf, int k, int len, const char *se
 			x[0] = (x[0] << 2 | c) & mask;
 			x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;
 			if (++l >= k) {
-				uint64_t y = x[0] < x[1] ? x[0] : x[1];
-				if (buf->n == buf->m) {
+				// Ensure buffer has space (check is outside of hot path now)
+				if (__builtin_expect(buf->n >= buf->m, 0)) {
 					buf->m = buf->m < 8 ? 8 : buf->m + (buf->m >> 1);
 					buf->a = (uint64_t*)realloc(buf->a, buf->m * sizeof(uint64_t));
 				}
+				uint64_t y = x[0] < x[1] ? x[0] : x[1];
 				buf->a[buf->n++] = y;
 			}
 		} else {
