@@ -13,6 +13,8 @@ KSEQ_INIT(gzFile, gzread)
 KHASHL_MAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kh_hash_uint64, kh_eq_generic)
 
 #define KMER_BUF_GROWTH_FACTOR 1.2
+#define KMER_REF_FLAG 0  // Flag for reference k-mer in combined map
+#define KMER_ALT_FLAG 1  // Flag for alternative k-mer in combined map
 
 const unsigned char seq_nt4_table[256] = {
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -154,8 +156,8 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 	
 	h = kmer_cnt_init();
 	// Pre-allocate hash table to avoid frequent resizing
-	// We'll have 2 k-mers per pattern (ref and alt), so allocate enough
-	// Hash table load factor is 0.75, so allocate db->n * 3 to be safe
+	// We'll have 2 k-mers per pattern (ref and alt)
+	// Allocate db->n * 3 to provide sufficient space with typical hash table load factors
 	kmer_cnt_m_resize(h, db->n * 3);
 	
 	for (i = 0; i < db->n; ++i) {
@@ -167,7 +169,7 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 			uint64_t can = canonical_kmer(kmer, k);
 			itr = kmer_cnt_put(h, can, &absent);
 			if (absent) {
-				kh_val(h, itr) = (i << 1) | 0; // pattern index i, is_alt=0 (reference)
+				kh_val(h, itr) = (i << 1) | KMER_REF_FLAG; // Encode pattern index and ref flag
 			} else {
 				++n_collisions;
 			}
@@ -179,7 +181,7 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 			uint64_t can = canonical_kmer(kmer, k);
 			itr = kmer_cnt_put(h, can, &absent);
 			if (absent) {
-				kh_val(h, itr) = (i << 1) | 1; // pattern index i, is_alt=1 (alternative)
+				kh_val(h, itr) = (i << 1) | KMER_ALT_FLAG; // Encode pattern index and alt flag
 			} else {
 				++n_collisions;
 			}
