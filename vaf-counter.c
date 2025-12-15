@@ -143,6 +143,9 @@ kmer_cnt_t *create_kmer_map(pattern_db_t *db, int k, int is_ref)
 	khint_t itr;
 	
 	h = kmer_cnt_init();
+	// Pre-allocate hash table to avoid frequent resizing
+	// Hash table load factor is 0.75, so allocate enough for all patterns
+	kmer_cnt_m_resize(h, db->n * 2);
 	
 	for (i = 0; i < db->n; ++i) {
 		char *kmer_str = is_ref ? db->a[i].ref_kmer : db->a[i].alt_kmer;
