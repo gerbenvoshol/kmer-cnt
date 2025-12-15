@@ -223,12 +223,18 @@ static void extract_kmers_to_buf(kmer_buf_t *buf, int k, int len, const char *se
 			x[0] = (x[0] << 2 | c) & mask;
 			x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;
 			if (++l >= k) {
+				uint64_t y = x[0] < x[1] ? x[0] : x[1];
 				// Ensure buffer has space; use branch hint since reallocation is rare
 				if (__builtin_expect(buf->n == buf->m, 0)) {
-					buf->m = buf->m < 8 ? 8 : buf->m + (buf->m >> 1);
-					buf->a = (uint64_t*)realloc(buf->a, buf->m * sizeof(uint64_t));
+					int new_m = buf->m < 8 ? 8 : buf->m + (buf->m >> 1);
+					uint64_t *new_a = (uint64_t*)realloc(buf->a, new_m * sizeof(uint64_t));
+					if (!new_a) {
+						// Realloc failed; keep existing buffer but stop adding k-mers
+						return;
+					}
+					buf->a = new_a;
+					buf->m = new_m;
 				}
-				uint64_t y = x[0] < x[1] ? x[0] : x[1];
 				buf->a[buf->n++] = y;
 			}
 		} else {
