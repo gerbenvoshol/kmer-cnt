@@ -27,6 +27,7 @@ uname -v = #18~24.04.1-Ubuntu SMP Sat Jun 28 04:46:03 UTC 2025
 /usr/bin/oslevel       = unknown
 /bin/universe          = unknown
 
+PATH: /home/runner/work/kmer-cnt/.codeql-scratch/dbs/cpp/working/autobuild/bin/
 PATH: /snap/bin/
 PATH: /home/runner/.local/bin/
 PATH: /opt/pipx_bin/
@@ -54,7 +55,7 @@ configure:2449:  trying ./
 configure:2478:   ./config.guess found
 configure:2478:   ./config.sub found
 configure:2750: checking for gcc
-configure:2771: found /usr/bin/gcc
+configure:2771: found /home/runner/work/kmer-cnt/.codeql-scratch/dbs/cpp/working/autobuild/bin/gcc
 configure:2783: result: gcc
 configure:3142: checking for C compiler version
 configure:3151: gcc --version >&5
@@ -66,7 +67,7 @@ warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 configure:3162: $? = 0
 configure:3151: gcc -v >&5
 Using built-in specs.
-COLLECT_GCC=gcc
+COLLECT_GCC=/usr/bin/gcc
 COLLECT_LTO_WRAPPER=/usr/libexec/gcc/x86_64-linux-gnu/13/lto-wrapper
 OFFLOAD_TARGET_NAMES=nvptx-none:amdgcn-amdhsa
 OFFLOAD_TARGET_DEFAULT=1
@@ -612,7 +613,7 @@ configure:5639: $? = 0
 configure:5639: result: yes
 configure:5645: checking for srand48_deterministic
 configure:5645: gcc -o conftest  -Wall -g -O2 -fvisibility=hidden   -fvisibility=hidden conftest.c  >&5
-/usr/bin/ld: /tmp/ccYKmEkM.o: in function `main':
+/usr/bin/ld: /tmp/cclnWi0L.o: in function `main':
 /home/runner/work/kmer-cnt/kmer-cnt/htslib/conftest.c:65:(.text.startup+0x9): undefined reference to `srand48_deterministic'
 collect2: error: ld returned 1 exit status
 configure:5645: $? = 1
@@ -709,7 +710,7 @@ conftest.c:51:6: warning: conflicting types for built-in function 'log'; expecte
       |      ^~~
 conftest.c:1:1: note: 'log' is declared in header '<math.h>'
     1 | /* confdefs.h */
-/usr/bin/ld: /tmp/ccdDapEc.o: in function `main':
+/usr/bin/ld: /tmp/ccDN2By5.o: in function `main':
 /home/runner/work/kmer-cnt/kmer-cnt/htslib/conftest.c:55:(.text.startup+0x9): undefined reference to `log'
 collect2: error: ld returned 1 exit status
 configure:5907: $? = 1
@@ -1125,7 +1126,6 @@ on runnervm6qbrg
 config.status:863: creating config.mk
 config.status:863: creating htslib.pc.tmp
 config.status:863: creating config.h
-config.status:1033: config.h is unchanged
 config.status:1059: linking htscodecs_bundled.mk to htscodecs.mk
 
 ## ---------------- ##
