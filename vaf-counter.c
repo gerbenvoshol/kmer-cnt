@@ -167,7 +167,7 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 			uint64_t can = canonical_kmer(kmer, k);
 			itr = kmer_cnt_put(h, can, &absent);
 			if (absent) {
-				kh_val(h, itr) = (i << 1) | 0; // pattern index, is_ref=0
+				kh_val(h, itr) = (i << 1) | 0; // pattern index i, is_alt=0 (reference)
 			} else {
 				++n_collisions;
 			}
@@ -179,7 +179,7 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 			uint64_t can = canonical_kmer(kmer, k);
 			itr = kmer_cnt_put(h, can, &absent);
 			if (absent) {
-				kh_val(h, itr) = (i << 1) | 1; // pattern index, is_alt=1
+				kh_val(h, itr) = (i << 1) | 1; // pattern index i, is_alt=1 (alternative)
 			} else {
 				++n_collisions;
 			}
