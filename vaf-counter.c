@@ -10,7 +10,9 @@
 KSEQ_INIT(gzFile, gzread)
 
 #include "khashl.h"
-KHASHL_MAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kh_hash_uint64, kh_eq_generic)
+// Use cached hash variant for better performance during collision resolution
+// This stores the hash value in each bucket to avoid recomputing during probing
+KHASHL_CMAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kh_hash_uint64, kh_eq_generic)
 
 #define KMER_BUF_GROWTH_FACTOR 1.2
 #define KMER_REF_FLAG 0  // Flag for reference k-mer in combined map
@@ -158,7 +160,7 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 	// Pre-allocate hash table to avoid frequent resizing
 	// We'll have 2 k-mers per pattern (ref and alt)
 	// Allocate db->n * 3 to provide sufficient space with typical hash table load factors
-	kmer_cnt_m_resize(h, db->n * 3);
+	kmer_cnt_cm_resize(h, db->n * 3);
 	
 	for (i = 0; i < db->n; ++i) {
 		uint64_t kmer;
