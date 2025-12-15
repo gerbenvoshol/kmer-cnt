@@ -135,8 +135,9 @@ void pattern_db_destroy(pattern_db_t *db)
 	}
 }
 
-// Create hash table mapping k-mer to pattern index
-kmer_cnt_t *create_kmer_map(pattern_db_t *db, int k, int is_ref)
+// Create combined hash table mapping k-mer to (pattern_index << 1) | is_alt
+// This allows both ref and alt k-mers in a single map
+kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 {
 	kmer_cnt_t *h;
 	int i, absent;
@@ -144,16 +145,27 @@ kmer_cnt_t *create_kmer_map(pattern_db_t *db, int k, int is_ref)
 	
 	h = kmer_cnt_init();
 	// Pre-allocate hash table to avoid frequent resizing
-	// Hash table load factor is 0.75, so allocate enough for all patterns
-	kmer_cnt_m_resize(h, db->n * 2);
+	// We'll have 2 k-mers per pattern (ref and alt), so allocate enough
+	// Hash table load factor is 0.75, so allocate db->n * 3 to be safe
+	kmer_cnt_m_resize(h, db->n * 3);
 	
 	for (i = 0; i < db->n; ++i) {
-		char *kmer_str = is_ref ? db->a[i].ref_kmer : db->a[i].alt_kmer;
-		uint64_t kmer = encode_kmer(kmer_str, k);
+		uint64_t kmer;
+		
+		// Add reference k-mer
+		kmer = encode_kmer(db->a[i].ref_kmer, k);
 		if (kmer != UINT64_MAX) {
 			uint64_t can = canonical_kmer(kmer, k);
 			itr = kmer_cnt_put(h, can, &absent);
-			if (absent) kh_val(h, itr) = i; // store pattern index
+			if (absent) kh_val(h, itr) = (i << 1) | 0; // pattern index, is_ref=0
+		}
+		
+		// Add alternative k-mer
+		kmer = encode_kmer(db->a[i].alt_kmer, k);
+		if (kmer != UINT64_MAX) {
+			uint64_t can = canonical_kmer(kmer, k);
+			itr = kmer_cnt_put(h, can, &absent);
+			if (absent) kh_val(h, itr) = (i << 1) | 1; // pattern index, is_alt=1
 		}
 	}
 	
@@ -190,8 +202,7 @@ static void extract_kmers_to_buf(kmer_buf_t *buf, int k, int len, const char *se
 typedef struct {
 	int k, block_len, n_thread;
 	kseq_t *ks;
-	kmer_cnt_t *ref_map;
-	kmer_cnt_t *alt_map;
+	kmer_cnt_t *kmer_map;  // Combined map for both ref and alt k-mers
 	pattern_db_t *db;
 } pipeline_t;
 
@@ -211,18 +222,18 @@ static void worker_lookup(void *data, long i, int tid)
 	uint64_t kmer = s->buf.a[i];
 	khint_t itr;
 	
-	// Check reference k-mers
-	itr = kmer_cnt_get(s->p->ref_map, kmer);
-	if (itr != kh_end(s->p->ref_map)) {
-		int idx = kh_val(s->p->ref_map, itr);
-		__sync_fetch_and_add(&s->p->db->a[idx].ref_count, 1);
-	}
-	
-	// Check alternative k-mers
-	itr = kmer_cnt_get(s->p->alt_map, kmer);
-	if (itr != kh_end(s->p->alt_map)) {
-		int idx = kh_val(s->p->alt_map, itr);
-		__sync_fetch_and_add(&s->p->db->a[idx].alt_count, 1);
+	// Check combined k-mer map (single lookup instead of two)
+	itr = kmer_cnt_get(s->p->kmer_map, kmer);
+	if (itr != kh_end(s->p->kmer_map)) {
+		uint32_t val = kh_val(s->p->kmer_map, itr);
+		int idx = val >> 1;        // Extract pattern index
+		int is_alt = val & 1;      // Extract ref/alt flag
+		
+		if (is_alt) {
+			__sync_fetch_and_add(&s->p->db->a[idx].alt_count, 1);
+		} else {
+			__sync_fetch_and_add(&s->p->db->a[idx].ref_count, 1);
+		}
 	}
 }
 
@@ -293,7 +304,7 @@ static void *worker_pipeline(void *data, int step, void *in)
 
 // Count k-mers in FASTQ files with multi-threading
 void count_fastq_kmers(const char *fn, int k, int n_thread, int block_size, 
-                       kmer_cnt_t *ref_map, kmer_cnt_t *alt_map, pattern_db_t *db)
+                       kmer_cnt_t *kmer_map, pattern_db_t *db)
 {
 	pipeline_t pl;
 	gzFile fp;
@@ -304,8 +315,7 @@ void count_fastq_kmers(const char *fn, int k, int n_thread, int block_size,
 	pl.k = k;
 	pl.n_thread = n_thread;
 	pl.block_len = block_size;
-	pl.ref_map = ref_map;
-	pl.alt_map = alt_map;
+	pl.kmer_map = kmer_map;
 	pl.db = db;
 	
 	kt_pipeline(3, worker_pipeline, &pl, 3);
@@ -319,7 +329,7 @@ int main(int argc, char *argv[])
 	int c, k = 21, i, n_thread = 4, block_size = 10000000;
 	char *pattern_fn = 0, *out_fn = 0;
 	pattern_db_t *db;
-	kmer_cnt_t *ref_map, *alt_map;
+	kmer_cnt_t *kmer_map;
 	FILE *out_fp;
 	uint64_t total_ref = 0, total_alt = 0;
 	double avg_depth;
@@ -352,14 +362,13 @@ int main(int argc, char *argv[])
 	}
 	fprintf(stderr, "[M::%s] Loaded %d patterns\n", __func__, db->n);
 	
-	fprintf(stderr, "[M::%s] Creating k-mer maps...\n", __func__);
-	ref_map = create_kmer_map(db, k, 1);
-	alt_map = create_kmer_map(db, k, 0);
+	fprintf(stderr, "[M::%s] Creating k-mer map...\n", __func__);
+	kmer_map = create_combined_kmer_map(db, k);
 	
 	fprintf(stderr, "[M::%s] Counting k-mers in FASTQ files with %d threads...\n", __func__, n_thread);
 	for (i = o.ind; i < argc; ++i) {
 		fprintf(stderr, "[M::%s] Processing %s...\n", __func__, argv[i]);
-		count_fastq_kmers(argv[i], k, n_thread, block_size, ref_map, alt_map, db);
+		count_fastq_kmers(argv[i], k, n_thread, block_size, kmer_map, db);
 	}
 	
 	// Calculate total counts
@@ -391,8 +400,7 @@ int main(int argc, char *argv[])
 	fclose(out_fp);
 	fprintf(stderr, "[M::%s] Done. Average depth: %.2f\n", __func__, avg_depth);
 	
-	kmer_cnt_destroy(ref_map);
-	kmer_cnt_destroy(alt_map);
+	kmer_cnt_destroy(kmer_map);
 	pattern_db_destroy(db);
 	
 	return 0;
