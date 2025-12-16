@@ -41,7 +41,7 @@ snp-pattern-gen:snp-pattern-gen.c khashl.h ketopt.h kseq.h
 	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
 
 vaf-counter:vaf-counter.c khashl.h ketopt.h kseq.h kthread.h
-	$(CC) $(CFLAGS) -msse4.1 -o $@ vaf-counter.c kthread.c $(LIBS) -lpthread
+	$(CC) $(CFLAGS) -mssse3 -msse4.1 -o $@ vaf-counter.c kthread.c $(LIBS) -lpthread
 
 ed-vaf-counter:ed-vaf-counter.c edlib.cpp edlib.h ketopt.h kseq.h
 	$(CXX) $(CXXFLAGS) -o $@ ed-vaf-counter.c edlib.cpp $(LIBS) -lstdc++

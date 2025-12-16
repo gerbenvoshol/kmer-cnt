@@ -211,6 +211,7 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 	// Pre-allocate hash table to avoid frequent resizing
 	// We'll have 2 k-mers per pattern (ref and alt)
 	// Allocate db->n * 3 to provide sufficient space with typical hash table load factors
+	// This reduces the number of rehashing operations during insertion
 	kmer_cnt_cm_resize(h, db->n * 3);
 	
 	for (i = 0; i < db->n; ++i) {
@@ -249,13 +250,49 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 	return h;
 }
 
-// SIMD-optimized sequence encoding (SSE4.2/AVX2)
+// SIMD-optimized sequence encoding using PSHUFB-based lookup table
+// This is significantly faster than the comparison-based approach
 #ifdef __x86_64__
-static inline void encode_seq_simd(const char *seq, int len, uint8_t *encoded) {
+
+#ifdef __SSSE3__
+// Fast SIMD encoding using PSHUFB lookup table (SSSE3+)
+// This approach is much faster than comparisons + blendv
+static inline void encode_seq_simd_ssse3(const char *seq, int len, uint8_t *encoded) {
 	int i;
-	// Use SIMD for bulk of the sequence
-	// Process 16 bytes at a time with SSE2
-#ifdef __SSE2__
+	
+	// Create lookup table for PSHUFB
+	// Maps ASCII values to nucleotide codes (0-3) or 4 (invalid)
+	// We use the low 4 bits of each ASCII character as index
+	// A/a (0x41/0x61) -> low nibble 0x1 -> maps to 0
+	// C/c (0x43/0x63) -> low nibble 0x3 -> maps to 1  
+	// G/g (0x47/0x67) -> low nibble 0x7 -> maps to 2
+	// T/t/U/u (0x54/0x74/0x55/0x75) -> low nibble 0x4/0x5 -> maps to 3
+	const __m128i lut = _mm_setr_epi8(
+		4, 0, 4, 1,  3, 3, 4, 2,  // 0x0-0x7
+		4, 4, 4, 4,  4, 4, 4, 4   // 0x8-0xF
+	);
+	const __m128i mask = _mm_set1_epi8(0x0F);
+	
+	for (i = 0; i + 16 <= len; i += 16) {
+		__m128i seq_vec = _mm_loadu_si128((__m128i*)(seq + i));
+		// Extract low nibble for lookup
+		__m128i nibble = _mm_and_si128(seq_vec, mask);
+		// Lookup encoding
+		__m128i result = _mm_shuffle_epi8(lut, nibble);
+		_mm_storeu_si128((__m128i*)(encoded + i), result);
+	}
+	
+	// Handle remaining bytes
+	for (; i < len; ++i) {
+		encoded[i] = seq_nt4_table[(uint8_t)seq[i]];
+	}
+}
+#endif
+
+#ifdef __SSE4_1__
+// SSE4.1 version using blendv (fallback for non-SSSE3)
+static inline void encode_seq_simd_sse41(const char *seq, int len, uint8_t *encoded) {
+	int i;
 	__m128i lut_A = _mm_set1_epi8('A');
 	__m128i lut_C = _mm_set1_epi8('C');
 	__m128i lut_G = _mm_set1_epi8('G');
@@ -283,11 +320,26 @@ static inline void encode_seq_simd(const char *seq, int len, uint8_t *encoded) {
 		
 		_mm_storeu_si128((__m128i*)(encoded + i), result);
 	}
-#endif
+	
 	// Handle remaining bytes
 	for (; i < len; ++i) {
 		encoded[i] = seq_nt4_table[(uint8_t)seq[i]];
 	}
+}
+#endif
+
+// Dispatcher function that chooses best available SIMD implementation
+static inline void encode_seq_simd(const char *seq, int len, uint8_t *encoded) {
+#ifdef __SSSE3__
+	encode_seq_simd_ssse3(seq, len, encoded);
+#elif defined(__SSE4_1__)
+	encode_seq_simd_sse41(seq, len, encoded);
+#else
+	// Scalar fallback
+	for (int i = 0; i < len; ++i) {
+		encoded[i] = seq_nt4_table[(uint8_t)seq[i]];
+	}
+#endif
 }
 #endif
 
@@ -383,12 +435,18 @@ typedef struct {
 	kmer_buf_t buf;
 } step_t;
 
-// Worker function for parallel k-mer lookup
+// Worker function for parallel k-mer lookup with prefetching
 static void worker_lookup(void *data, long i, int tid)
 {
 	step_t *s = (step_t*)data;
 	uint64_t kmer = s->buf.a[i];
 	khint_t itr;
+	
+	// Prefetch next k-mers to improve cache utilization
+	// This helps reduce cache misses in the tight loop
+	if (i + 4 < s->buf.n) {
+		__builtin_prefetch(&s->buf.a[i + 4], 0, 1);
+	}
 	
 	// Check combined k-mer map (single lookup instead of two)
 	itr = kmer_cnt_get(s->p->kmer_map, kmer);
@@ -396,6 +454,9 @@ static void worker_lookup(void *data, long i, int tid)
 		uint32_t val = kh_val(s->p->kmer_map, itr);
 		int idx = val >> 1;        // Extract pattern index
 		int is_alt = val & 1;      // Extract ref/alt flag
+		
+		// Prefetch the pattern data we're about to update
+		__builtin_prefetch(&s->p->db->a[idx], 1, 1);
 		
 		// Use relaxed atomic operations for better performance
 		// Memory ordering doesn't matter here since we only care about final counts
@@ -651,6 +712,10 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "  SIMD:                  AVX2 enabled\n");
 #elif defined(__SSE4_2__)
 		fprintf(stderr, "  SIMD:                  SSE4.2 enabled\n");
+#elif defined(__SSSE3__)
+		fprintf(stderr, "  SIMD:                  SSSE3 enabled (optimized PSHUFB)\n");
+#elif defined(__SSE4_1__)
+		fprintf(stderr, "  SIMD:                  SSE4.1 enabled\n");
 #elif defined(__SSE2__)
 		fprintf(stderr, "  SIMD:                  SSE2 enabled\n");
 #else
