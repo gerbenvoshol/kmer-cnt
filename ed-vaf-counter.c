@@ -33,6 +33,7 @@ typedef struct {
 	char alt;
 	char ref_kmer[128];
 	char alt_kmer[128];
+	int kmer_len;  // Length of k-mer (cached to avoid strlen calls)
 	uint32_t ref_count;
 	uint32_t alt_count;
 } pattern_t;
@@ -73,6 +74,7 @@ pattern_db_t *load_patterns(const char *fn)
 		}
 		pat.ref_count = 0;
 		pat.alt_count = 0;
+		pat.kmer_len = strlen(pat.ref_kmer);  // Cache k-mer length
 		db->a[db->n++] = pat;
 	}
 	
@@ -90,12 +92,11 @@ void pattern_db_destroy(pattern_db_t *db)
 
 // Search for k-mer pattern in a sequence using edlib
 // Returns number of matches found
-static int search_kmer_in_seq(const char *kmer, const char *seq, int seq_len, int max_edit_dist)
+static int search_kmer_in_seq(const char *kmer, int kmer_len, const char *seq, int seq_len, int max_edit_dist)
 {
 	EdlibAlignResult result;
 	EdlibAlignConfig config;
 	int count = 0;
-	int kmer_len = strlen(kmer);
 	
 	// Configure edlib for infix alignment (k-mer anywhere in sequence)
 	// with specified maximum edit distance
@@ -139,12 +140,12 @@ static void count_fastq_kmers(const char *fn, pattern_db_t *db, int max_edit_dis
 		
 		// For each pattern, search for both ref and alt k-mers
 		for (i = 0; i < db->n; ++i) {
-			int ref_matches = search_kmer_in_seq(db->a[i].ref_kmer, seq, seq_len, max_edit_dist);
-			int alt_matches = search_kmer_in_seq(db->a[i].alt_kmer, seq, seq_len, max_edit_dist);
+			int ref_matches = search_kmer_in_seq(db->a[i].ref_kmer, db->a[i].kmer_len, seq, seq_len, max_edit_dist);
+			int alt_matches = search_kmer_in_seq(db->a[i].alt_kmer, db->a[i].kmer_len, seq, seq_len, max_edit_dist);
 			
-			// Update counts (using atomic add to be thread-safe if we add threading later)
-			__sync_fetch_and_add(&db->a[i].ref_count, ref_matches);
-			__sync_fetch_and_add(&db->a[i].alt_count, alt_matches);
+			// Update counts (single-threaded, no synchronization needed)
+			db->a[i].ref_count += ref_matches;
+			db->a[i].alt_count += alt_matches;
 		}
 	}
 	
