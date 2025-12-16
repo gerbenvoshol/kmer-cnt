@@ -11,6 +11,13 @@ KSEQ_INIT(gzFile, gzread)
 
 #include "khashl.h"
 
+/*
+ * Performance optimizations applied:
+ * 1. Buffer growth factor increased to 1.5 (from 1.2) to reduce realloc frequency
+ * 2. Pre-allocate exact buffer size in pipeline step 2 to avoid reallocation
+ * 3. Use __ATOMIC_RELAXED for counter updates (reduces memory ordering overhead)
+ */
+
 // Fast hash function for k-mers
 // K-mers are already well-distributed due to canonical representation,
 // so we can use a simple multiplicative hash instead of the complex kh_hash_uint64
@@ -27,7 +34,7 @@ static inline khint_t kmer_hash(uint64_t key) {
 // This stores the hash value in each bucket to avoid recomputing during probing
 KHASHL_CMAP_INIT(, kmer_cnt_t, kmer_cnt, uint64_t, uint32_t, kmer_hash, kh_eq_generic)
 
-#define KMER_BUF_GROWTH_FACTOR 1.2
+#define KMER_BUF_GROWTH_FACTOR 1.5  // Increased from 1.2 for fewer reallocations
 #define KMER_REF_FLAG 0  // Flag for reference k-mer in combined map
 #define KMER_ALT_FLAG 1  // Flag for alternative k-mer in combined map
 
@@ -275,10 +282,12 @@ static void worker_lookup(void *data, long i, int tid)
 		int idx = val >> 1;        // Extract pattern index
 		int is_alt = val & 1;      // Extract ref/alt flag
 		
+		// Use relaxed atomic operations for better performance
+		// Memory ordering doesn't matter here since we only care about final counts
 		if (is_alt) {
-			__sync_fetch_and_add(&s->p->db->a[idx].alt_count, 1);
+			__atomic_fetch_add(&s->p->db->a[idx].alt_count, 1, __ATOMIC_RELAXED);
 		} else {
-			__sync_fetch_and_add(&s->p->db->a[idx].ref_count, 1);
+			__atomic_fetch_add(&s->p->db->a[idx].ref_count, 1, __ATOMIC_RELAXED);
 		}
 	}
 }
@@ -323,7 +332,8 @@ static void *worker_pipeline(void *data, int step, void *in)
 		step_t *s = (step_t*)in;
 		int i;
 		
-		s->buf.m = (int)(s->nk * KMER_BUF_GROWTH_FACTOR) + 1;
+		// Pre-allocate exact size needed to avoid reallocation during extraction
+		s->buf.m = s->nk;
 		s->buf.a = (uint64_t*)malloc(s->buf.m * sizeof(uint64_t));
 		s->buf.n = 0;
 		

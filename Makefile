@@ -5,7 +5,7 @@ MATHLIBS=-lm
 HTSLIB=htslib/libhts.a
 HTSINC=-Ihtslib
 HTSLIBS=$(HTSLIB) -lz -lm -lpthread
-PROG=kc-c1 kc-c2 kc-c3 kc-c4 kc-cpp1 kc-cpp2 yak-count snp-pattern-gen vaf-counter correlation-matrix match-classifier bam-vaf-counter vcf-vaf-counter
+PROG=kc-c1 kc-c2 kc-c3 kc-c4 kc-cpp1 kc-cpp2 yak-count snp-pattern-gen vaf-counter ed-vaf-counter correlation-matrix match-classifier bam-vaf-counter vcf-vaf-counter
 
 ifneq ($(asan),)
 	CFLAGS+=-fsanitize=address
@@ -42,6 +42,9 @@ snp-pattern-gen:snp-pattern-gen.c khashl.h ketopt.h kseq.h
 
 vaf-counter:vaf-counter.c khashl.h ketopt.h kseq.h kthread.h
 	$(CC) $(CFLAGS) -o $@ vaf-counter.c kthread.c $(LIBS) -lpthread
+
+ed-vaf-counter:ed-vaf-counter.c edlib.cpp edlib.h ketopt.h kseq.h
+	$(CXX) $(CXXFLAGS) -o $@ ed-vaf-counter.c edlib.cpp $(LIBS) -lstdc++
 
 correlation-matrix:correlation-matrix.c ketopt.h
 	$(CC) $(CFLAGS) -o $@ $< $(MATHLIBS)
