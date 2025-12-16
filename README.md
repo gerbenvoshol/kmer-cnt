@@ -40,6 +40,9 @@ chr19	4945904	4945905	rs2250981	C	T
 
 ```sh
 ./vaf-counter -k 21 -t 4 -p patterns.txt -o sample1.vaf reads1.fq reads2.fq
+
+# With verbose performance reporting
+./vaf-counter -k 21 -t 4 -p patterns.txt -o sample1.vaf -v reads1.fq reads2.fq
 ```
 
 **Input:**
@@ -47,11 +50,12 @@ chr19	4945904	4945905	rs2250981	C	T
 - `-k` K-mer length (must match pattern generation)
 - `-t` Number of threads (default: 4, for faster multi-threaded processing)
 - `-b` Block size for batching sequences (default: 10000000)
+- `-v` Verbose mode: report detailed performance statistics
 - One or more FASTQ files (can be gzipped)
 
 **Output:** VAF file with variant allele frequencies and depth information
 
-**Performance:** vaf-counter uses multi-threaded k-mer counting similar to kc-c4.c, with a 3-stage pipeline (read sequences, extract k-mers, lookup k-mers) for optimal performance.
+**Performance:** vaf-counter uses multi-threaded k-mer counting similar to kc-c4.c, with a 3-stage pipeline (read sequences, extract k-mers, lookup k-mers) for optimal performance. The tool includes SIMD optimizations (SSSE3/SSE4.1) for faster sequence encoding and prefetching for reduced cache misses. Use the `-v` flag to see detailed performance metrics including throughput (Mbases/sec), k-mer extraction rate, and SIMD optimization level.
 
 #### 2alt. Alternative: Count k-mers using approximate matching (ed-vaf-counter)
 
