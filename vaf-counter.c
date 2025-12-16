@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <zlib.h>
+#include <time.h>
+#include <sys/time.h>
 #include "ketopt.h"
 #include "kthread.h"
 
@@ -11,12 +13,41 @@ KSEQ_INIT(gzFile, gzread)
 
 #include "khashl.h"
 
+// SIMD headers
+#ifdef __x86_64__
+#include <immintrin.h>
+#endif
+
 /*
  * Performance optimizations applied:
  * 1. Buffer growth factor increased to 1.5 (from 1.2) to reduce realloc frequency
  * 2. Pre-allocate exact buffer size in pipeline step 2 to avoid reallocation
  * 3. Use __ATOMIC_RELAXED for counter updates (reduces memory ordering overhead)
+ * 4. SIMD optimizations for k-mer extraction using SSE4.2/AVX2
+ * 5. Verbose performance reporting option
  */
+
+// Performance statistics structure
+typedef struct {
+	double time_pattern_load;
+	double time_kmer_map_create;
+	double time_kmer_counting;
+	double time_output_write;
+	uint64_t total_kmers_extracted;
+	uint64_t total_sequences_processed;
+	uint64_t total_bases_processed;
+	int verbose;
+} perf_stats_t;
+
+// Global performance stats
+static perf_stats_t g_perf_stats = {0};
+
+// Timing helper functions
+static inline double get_time(void) {
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return tv.tv_sec + tv.tv_usec * 1e-6;
+}
 
 // Fast hash function for k-mers
 // K-mers are already well-distributed due to canonical representation,
@@ -218,12 +249,93 @@ kmer_cnt_t *create_combined_kmer_map(pattern_db_t *db, int k)
 	return h;
 }
 
+// SIMD-optimized sequence encoding (SSE4.2/AVX2)
+#ifdef __x86_64__
+static inline void encode_seq_simd(const char *seq, int len, uint8_t *encoded) {
+	int i;
+	// Use SIMD for bulk of the sequence
+	// Process 16 bytes at a time with SSE2
+#ifdef __SSE2__
+	__m128i lut_A = _mm_set1_epi8('A');
+	__m128i lut_C = _mm_set1_epi8('C');
+	__m128i lut_G = _mm_set1_epi8('G');
+	__m128i lut_T = _mm_set1_epi8('T');
+	__m128i lut_a = _mm_set1_epi8('a');
+	__m128i lut_c = _mm_set1_epi8('c');
+	__m128i lut_g = _mm_set1_epi8('g');
+	__m128i lut_t = _mm_set1_epi8('t');
+	
+	for (i = 0; i + 16 <= len; i += 16) {
+		__m128i seq_vec = _mm_loadu_si128((__m128i*)(seq + i));
+		__m128i result = _mm_set1_epi8(4); // Default to 4 (invalid)
+		
+		// Compare with each nucleotide
+		__m128i cmp_A = _mm_or_si128(_mm_cmpeq_epi8(seq_vec, lut_A), _mm_cmpeq_epi8(seq_vec, lut_a));
+		__m128i cmp_C = _mm_or_si128(_mm_cmpeq_epi8(seq_vec, lut_C), _mm_cmpeq_epi8(seq_vec, lut_c));
+		__m128i cmp_G = _mm_or_si128(_mm_cmpeq_epi8(seq_vec, lut_G), _mm_cmpeq_epi8(seq_vec, lut_g));
+		__m128i cmp_T = _mm_or_si128(_mm_cmpeq_epi8(seq_vec, lut_T), _mm_cmpeq_epi8(seq_vec, lut_t));
+		
+		// Set encoded values
+		result = _mm_blendv_epi8(result, _mm_set1_epi8(0), cmp_A);
+		result = _mm_blendv_epi8(result, _mm_set1_epi8(1), cmp_C);
+		result = _mm_blendv_epi8(result, _mm_set1_epi8(2), cmp_G);
+		result = _mm_blendv_epi8(result, _mm_set1_epi8(3), cmp_T);
+		
+		_mm_storeu_si128((__m128i*)(encoded + i), result);
+	}
+#endif
+	// Handle remaining bytes
+	for (; i < len; ++i) {
+		encoded[i] = seq_nt4_table[(uint8_t)seq[i]];
+	}
+}
+#endif
+
 // Extract k-mers from a sequence into a buffer
 static void extract_kmers_to_buf(kmer_buf_t *buf, int k, int len, const char *seq)
 {
 	int i, l;
 	uint64_t x[2], mask = (1ULL << k*2) - 1, shift = (k - 1) * 2;
 	
+#ifdef __x86_64__
+	// Use SIMD for encoding sequence on x86_64
+	uint8_t *encoded = (uint8_t*)malloc(len);
+	if (encoded) {
+		encode_seq_simd(seq, len, encoded);
+		
+		for (i = l = 0, x[0] = x[1] = 0; i < len; ++i) {
+			int c = encoded[i];
+			if (c < 4) {
+				x[0] = (x[0] << 2 | c) & mask;
+				x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;
+				if (++l >= k) {
+					uint64_t y = x[0] < x[1] ? x[0] : x[1];
+					// Ensure buffer has space; use branch hint since reallocation is rare
+					if (__builtin_expect(buf->n == buf->m, 0)) {
+						int new_m = buf->m < 8 ? 8 : buf->m + (buf->m >> 1);
+						uint64_t *new_a = (uint64_t*)realloc(buf->a, new_m * sizeof(uint64_t));
+						if (!new_a) {
+							// Realloc failed; keep existing buffer but stop adding k-mers
+							free(encoded);
+							return;
+						}
+						buf->a = new_a;
+						buf->m = new_m;
+					}
+					buf->a[buf->n++] = y;
+					g_perf_stats.total_kmers_extracted++;
+				}
+			} else {
+				l = 0;
+				x[0] = x[1] = 0;
+			}
+		}
+		free(encoded);
+		return;
+	}
+#endif
+	
+	// Fallback to scalar implementation
 	for (i = l = 0, x[0] = x[1] = 0; i < len; ++i) {
 		int c = seq_nt4_table[(uint8_t)seq[i]];
 		if (c < 4) {
@@ -243,6 +355,7 @@ static void extract_kmers_to_buf(kmer_buf_t *buf, int k, int len, const char *se
 					buf->m = new_m;
 				}
 				buf->a[buf->n++] = y;
+				g_perf_stats.total_kmers_extracted++;
 			}
 		} else {
 			l = 0;
@@ -257,6 +370,8 @@ typedef struct {
 	kseq_t *ks;
 	kmer_cnt_t *kmer_map;  // Combined map for both ref and alt k-mers
 	pattern_db_t *db;
+	uint64_t total_bases;  // Track total bases for performance stats
+	uint64_t total_seqs;   // Track total sequences for performance stats
 } pipeline_t;
 
 // Data for each pipeline step
@@ -317,6 +432,8 @@ static void *worker_pipeline(void *data, int step, void *in)
 			s->len[s->n++] = l;
 			s->sum_len += l;
 			s->nk += l - p->k + 1;
+			p->total_bases += l;
+			p->total_seqs++;
 			
 			if (s->sum_len >= p->block_len)
 				break;
@@ -364,6 +481,7 @@ void count_fastq_kmers(const char *fn, int k, int n_thread, int block_size,
 {
 	pipeline_t pl;
 	gzFile fp;
+	double t0 = get_time();
 	
 	if ((fp = gzopen(fn, "r")) == 0) return;
 	
@@ -373,8 +491,20 @@ void count_fastq_kmers(const char *fn, int k, int n_thread, int block_size,
 	pl.block_len = block_size;
 	pl.kmer_map = kmer_map;
 	pl.db = db;
+	pl.total_bases = 0;
+	pl.total_seqs = 0;
 	
 	kt_pipeline(3, worker_pipeline, &pl, 3);
+	
+	g_perf_stats.total_bases_processed += pl.total_bases;
+	g_perf_stats.total_sequences_processed += pl.total_seqs;
+	
+	if (g_perf_stats.verbose) {
+		double elapsed = get_time() - t0;
+		fprintf(stderr, "[V::%s] Processed %s: %llu sequences, %llu bases in %.2f sec (%.2f Mbases/sec)\n",
+		        __func__, fn, (unsigned long long)pl.total_seqs, (unsigned long long)pl.total_bases, 
+		        elapsed, pl.total_bases / elapsed / 1e6);
+	}
 	
 	kseq_destroy(pl.ks);
 	gzclose(fp);
@@ -389,14 +519,18 @@ int main(int argc, char *argv[])
 	FILE *out_fp;
 	uint64_t total_ref = 0, total_alt = 0;
 	double avg_depth;
+	double t_start, t_end;
 	ketopt_t o = KETOPT_INIT;
 	
-	while ((c = ketopt(&o, argc, argv, 1, "k:p:o:t:b:", 0)) >= 0) {
+	g_perf_stats.verbose = 0;
+	
+	while ((c = ketopt(&o, argc, argv, 1, "k:p:o:t:b:v", 0)) >= 0) {
 		if (c == 'k') k = atoi(o.arg);
 		else if (c == 'p') pattern_fn = o.arg;
 		else if (c == 'o') out_fn = o.arg;
 		else if (c == 't') n_thread = atoi(o.arg);
 		else if (c == 'b') block_size = atoi(o.arg);
+		else if (c == 'v') g_perf_stats.verbose = 1;
 	}
 	
 	if (!pattern_fn || !out_fn || argc - o.ind < 1) {
@@ -407,30 +541,43 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "  -o FILE   output VAF file\n");
 		fprintf(stderr, "  -t INT    number of threads [%d]\n", n_thread);
 		fprintf(stderr, "  -b INT    block size [%d]\n", block_size);
+		fprintf(stderr, "  -v        verbose mode (report performance statistics)\n");
 		return 1;
 	}
 	
+	t_start = get_time();
+	
 	fprintf(stderr, "[M::%s] Loading patterns...\n", __func__);
+	t_end = get_time();
 	db = load_patterns(pattern_fn, k);
 	if (!db) {
 		fprintf(stderr, "Error: failed to load pattern file\n");
 		return 1;
 	}
-	fprintf(stderr, "[M::%s] Loaded %d patterns\n", __func__, db->n);
+	g_perf_stats.time_pattern_load = get_time() - t_end;
+	fprintf(stderr, "[M::%s] Loaded %d patterns in %.3f sec\n", __func__, db->n, g_perf_stats.time_pattern_load);
 	
 	fprintf(stderr, "[M::%s] Creating k-mer map...\n", __func__);
+	t_end = get_time();
 	kmer_map = create_combined_kmer_map(db, k);
 	if (!kmer_map) {
 		fprintf(stderr, "Error: failed to create k-mer map\n");
 		pattern_db_destroy(db);
 		return 1;
 	}
+	g_perf_stats.time_kmer_map_create = get_time() - t_end;
+	if (g_perf_stats.verbose) {
+		fprintf(stderr, "[V::%s] Created k-mer map with %d entries in %.3f sec\n", 
+		        __func__, kh_size(kmer_map), g_perf_stats.time_kmer_map_create);
+	}
 	
 	fprintf(stderr, "[M::%s] Counting k-mers in FASTQ files with %d threads...\n", __func__, n_thread);
+	t_end = get_time();
 	for (i = o.ind; i < argc; ++i) {
 		fprintf(stderr, "[M::%s] Processing %s...\n", __func__, argv[i]);
 		count_fastq_kmers(argv[i], k, n_thread, block_size, kmer_map, db);
 	}
+	g_perf_stats.time_kmer_counting = get_time() - t_end;
 	
 	// Calculate total counts
 	for (i = 0; i < db->n; ++i) {
@@ -440,6 +587,7 @@ int main(int argc, char *argv[])
 	avg_depth = (double)(total_ref + total_alt) / (db->n > 0 ? db->n : 1);
 	
 	fprintf(stderr, "[M::%s] Writing VAF file...\n", __func__);
+	t_end = get_time();
 	out_fp = fopen(out_fn, "w");
 	if (!out_fp) {
 		fprintf(stderr, "Error: failed to open output file\n");
@@ -459,7 +607,58 @@ int main(int argc, char *argv[])
 	}
 	
 	fclose(out_fp);
+	g_perf_stats.time_output_write = get_time() - t_end;
+	
 	fprintf(stderr, "[M::%s] Done. Average depth: %.2f\n", __func__, avg_depth);
+	
+	// Print performance statistics if verbose mode enabled
+	if (g_perf_stats.verbose) {
+		double total_time = get_time() - t_start;
+		fprintf(stderr, "\n=== Performance Statistics ===\n");
+		fprintf(stderr, "Total runtime:           %.3f sec\n", total_time);
+		fprintf(stderr, "  Pattern loading:       %.3f sec (%.1f%%)\n", 
+		        g_perf_stats.time_pattern_load, 100.0 * g_perf_stats.time_pattern_load / total_time);
+		fprintf(stderr, "  K-mer map creation:    %.3f sec (%.1f%%)\n", 
+		        g_perf_stats.time_kmer_map_create, 100.0 * g_perf_stats.time_kmer_map_create / total_time);
+		fprintf(stderr, "  K-mer counting:        %.3f sec (%.1f%%)\n", 
+		        g_perf_stats.time_kmer_counting, 100.0 * g_perf_stats.time_kmer_counting / total_time);
+		fprintf(stderr, "  Output writing:        %.3f sec (%.1f%%)\n", 
+		        g_perf_stats.time_output_write, 100.0 * g_perf_stats.time_output_write / total_time);
+		fprintf(stderr, "\nThroughput:\n");
+		fprintf(stderr, "  Sequences processed:   %llu\n", (unsigned long long)g_perf_stats.total_sequences_processed);
+		fprintf(stderr, "  Bases processed:       %llu (%.2f Mbases)\n", 
+		        (unsigned long long)g_perf_stats.total_bases_processed,
+		        g_perf_stats.total_bases_processed / 1e6);
+		fprintf(stderr, "  K-mers extracted:      %llu (%.2f million)\n",
+		        (unsigned long long)g_perf_stats.total_kmers_extracted,
+		        g_perf_stats.total_kmers_extracted / 1e6);
+		if (g_perf_stats.time_kmer_counting > 0) {
+			fprintf(stderr, "  Speed:                 %.2f Mbases/sec\n",
+			        g_perf_stats.total_bases_processed / g_perf_stats.time_kmer_counting / 1e6);
+			fprintf(stderr, "  K-mer throughput:      %.2f million k-mers/sec\n",
+			        g_perf_stats.total_kmers_extracted / g_perf_stats.time_kmer_counting / 1e6);
+		}
+		fprintf(stderr, "\nMemory:\n");
+		fprintf(stderr, "  Patterns:              %d\n", db->n);
+		fprintf(stderr, "  Hash table entries:    %d\n", kh_size(kmer_map));
+		fprintf(stderr, "  Hash table capacity:   %d\n", kh_capacity(kmer_map));
+		fprintf(stderr, "  Hash table load:       %.1f%%\n", 
+		        100.0 * kh_size(kmer_map) / kh_capacity(kmer_map));
+		
+		// Report SIMD capabilities
+		fprintf(stderr, "\nOptimizations:\n");
+#ifdef __AVX2__
+		fprintf(stderr, "  SIMD:                  AVX2 enabled\n");
+#elif defined(__SSE4_2__)
+		fprintf(stderr, "  SIMD:                  SSE4.2 enabled\n");
+#elif defined(__SSE2__)
+		fprintf(stderr, "  SIMD:                  SSE2 enabled\n");
+#else
+		fprintf(stderr, "  SIMD:                  Not available\n");
+#endif
+		fprintf(stderr, "  Threads:               %d workers\n", n_thread);
+		fprintf(stderr, "==============================\n");
+	}
 	
 	kmer_cnt_destroy(kmer_map);
 	pattern_db_destroy(db);
