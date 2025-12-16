@@ -23,8 +23,9 @@ KSEQ_INIT(gzFile, gzread)
  * 1. Buffer growth factor increased to 1.5 (from 1.2) to reduce realloc frequency
  * 2. Pre-allocate exact buffer size in pipeline step 2 to avoid reallocation
  * 3. Use __ATOMIC_RELAXED for counter updates (reduces memory ordering overhead)
- * 4. SIMD optimizations for k-mer extraction using SSE4.2/AVX2
- * 5. Verbose performance reporting option
+ * 4. SIMD optimizations for k-mer extraction using SSSE3/SSE4.1
+ * 5. Software prefetching to reduce cache misses
+ * 6. Verbose performance reporting option
  */
 
 // Performance statistics structure
@@ -265,11 +266,12 @@ static inline void encode_seq_simd_ssse3(const char *seq, int len, uint8_t *enco
 	// We use the low 4 bits of each ASCII character as index
 	// A/a (0x41/0x61) -> low nibble 0x1 -> maps to 0
 	// C/c (0x43/0x63) -> low nibble 0x3 -> maps to 1  
+	// T/t (0x54/0x74) -> low nibble 0x4 -> maps to 3
+	// U/u (0x55/0x75) -> low nibble 0x5 -> maps to 3
 	// G/g (0x47/0x67) -> low nibble 0x7 -> maps to 2
-	// T/t/U/u (0x54/0x74/0x55/0x75) -> low nibble 0x4/0x5 -> maps to 3
 	const __m128i lut = _mm_setr_epi8(
-		4, 0, 4, 1,  3, 3, 4, 2,  // 0x0-0x7
-		4, 4, 4, 4,  4, 4, 4, 4   // 0x8-0xF
+		4, 0, 4, 1,  3, 3, 4, 2,  // 0x0-0x7: invalid, A, invalid, C, T, U, invalid, G
+		4, 4, 4, 4,  4, 4, 4, 4   // 0x8-0xF: all invalid
 	);
 	const __m128i mask = _mm_set1_epi8(0x0F);
 	
@@ -354,6 +356,14 @@ static void extract_kmers_to_buf(kmer_buf_t *buf, int k, int len, const char *se
 	uint8_t *encoded = (uint8_t*)malloc(len);
 	if (encoded) {
 		encode_seq_simd(seq, len, encoded);
+	} else {
+		// Memory allocation failed, log warning and fall back to scalar
+		if (g_perf_stats.verbose) {
+			fprintf(stderr, "[W::%s] Failed to allocate encoding buffer (%d bytes), using scalar fallback\n", 
+			        __func__, len);
+		}
+	}
+	if (encoded) {
 		
 		for (i = l = 0, x[0] = x[1] = 0; i < len; ++i) {
 			int c = encoded[i];
@@ -708,18 +718,14 @@ int main(int argc, char *argv[])
 		
 		// Report SIMD capabilities
 		fprintf(stderr, "\nOptimizations:\n");
-#ifdef __AVX2__
-		fprintf(stderr, "  SIMD:                  AVX2 enabled\n");
-#elif defined(__SSE4_2__)
-		fprintf(stderr, "  SIMD:                  SSE4.2 enabled\n");
-#elif defined(__SSSE3__)
+#ifdef __SSSE3__
 		fprintf(stderr, "  SIMD:                  SSSE3 enabled (optimized PSHUFB)\n");
 #elif defined(__SSE4_1__)
-		fprintf(stderr, "  SIMD:                  SSE4.1 enabled\n");
+		fprintf(stderr, "  SIMD:                  SSE4.1 enabled (blendv)\n");
 #elif defined(__SSE2__)
-		fprintf(stderr, "  SIMD:                  SSE2 enabled\n");
+		fprintf(stderr, "  SIMD:                  SSE2 enabled (basic)\n");
 #else
-		fprintf(stderr, "  SIMD:                  Not available\n");
+		fprintf(stderr, "  SIMD:                  Not available (scalar fallback)\n");
 #endif
 		fprintf(stderr, "  Threads:               %d workers\n", n_thread);
 		fprintf(stderr, "==============================\n");
