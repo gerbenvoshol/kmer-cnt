@@ -1,17 +1,18 @@
 ## SNP K-mer Analysis Tools
 
-This repository includes six C programs for SNP-based sample correlation analysis, inspired by [NGSCheckMate](https://github.com/parklab/NGSCheckMate):
+This repository includes seven C programs for SNP-based sample correlation analysis, inspired by [NGSCheckMate](https://github.com/parklab/NGSCheckMate):
 
 ### Overview
 
-The pipeline consists of six programs:
+The pipeline consists of seven programs:
 
 1. **snp-pattern-gen** - Extracts unique k-mers from SNP positions
 2. **vaf-counter** - Counts k-mer occurrences in FASTQ files and calculates variant allele frequencies
-3. **bam-vaf-counter** - Counts k-mer occurrences in BAM files (uses htslib)
-4. **vcf-vaf-counter** - Generates VAF files directly from VCF files (uses htslib)
-5. **correlation-matrix** - Computes Pearson correlation between samples
-6. **match-classifier** - Classifies matched samples using depth-dependent thresholds
+3. **ed-vaf-counter** - Alternative FASTQ k-mer counter using edlib for approximate matching
+4. **bam-vaf-counter** - Counts k-mer occurrences in BAM files (uses htslib)
+5. **vcf-vaf-counter** - Generates VAF files directly from VCF files (uses htslib)
+6. **correlation-matrix** - Computes Pearson correlation between samples
+7. **match-classifier** - Classifies matched samples using depth-dependent thresholds
 
 ### Usage
 
@@ -51,6 +52,32 @@ chr19	4945904	4945905	rs2250981	C	T
 **Output:** VAF file with variant allele frequencies and depth information
 
 **Performance:** vaf-counter uses multi-threaded k-mer counting similar to kc-c4.c, with a 3-stage pipeline (read sequences, extract k-mers, lookup k-mers) for optimal performance.
+
+#### 2alt. Alternative: Count k-mers using approximate matching (ed-vaf-counter)
+
+For situations where approximate matching is desired, or when the pattern set is small:
+
+```sh
+./ed-vaf-counter -p patterns.txt -o sample1.vaf -e 0 reads1.fq reads2.fq
+```
+
+**Input:**
+- `-p` Pattern file from step 1
+- `-e` Maximum edit distance for approximate matching (default: 0 for exact match)
+- One or more FASTQ files (can be gzipped)
+
+**Output:** VAF file with variant allele frequencies and depth information
+
+**Approach:** Unlike vaf-counter which extracts all k-mers from reads and looks them up in a hash table, ed-vaf-counter uses [edlib](https://github.com/Martinsos/edlib) to search for each pattern k-mer in the FASTQ reads using approximate string matching. This approach:
+- Reverses the search direction (pattern→reads instead of reads→patterns)
+- Allows approximate matching with configurable edit distance (-e parameter)
+- Can be more efficient when the number of patterns is small relative to total k-mers
+- Enables fuzzy matching to account for sequencing errors
+
+**Use cases:**
+- When you want to allow mismatches/indels in k-mer matching (set -e > 0)
+- When you have a very small pattern set and large FASTQ files
+- For exploratory analysis with approximate matching
 
 #### 2b. Alternative: Count k-mers in BAM files
 
@@ -150,7 +177,7 @@ For variant call data (VCF/BCF files):
 
 ```sh
 # Build the tools (includes htslib)
-make snp-pattern-gen vaf-counter bam-vaf-counter vcf-vaf-counter correlation-matrix match-classifier
+make snp-pattern-gen vaf-counter ed-vaf-counter bam-vaf-counter vcf-vaf-counter correlation-matrix match-classifier
 
 # Run the complete pipeline with FASTQ files
 ./snp-pattern-gen -k 21 -b dbSNP.bed -f hg38.fa -o patterns.txt
@@ -158,6 +185,10 @@ make snp-pattern-gen vaf-counter bam-vaf-counter vcf-vaf-counter correlation-mat
 ./vaf-counter -k 21 -p patterns.txt -o sample2.vaf sample2_R1.fq.gz sample2_R2.fq.gz
 ./correlation-matrix -M matched -o correlation.corr sample1.vaf sample2.vaf
 ./match-classifier -c correlation.corr -o matches.txt -P sample1.vaf sample2.vaf
+
+# Or use ed-vaf-counter for approximate matching (allows mismatches)
+./ed-vaf-counter -p patterns.txt -e 1 -o sample1.vaf sample1_R1.fq.gz sample1_R2.fq.gz
+./ed-vaf-counter -p patterns.txt -e 1 -o sample2.vaf sample2_R1.fq.gz sample2_R2.fq.gz
 
 # Or use BAM files instead
 ./bam-vaf-counter -k 21 -p patterns.txt -o sample1.vaf sample1.bam

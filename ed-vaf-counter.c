@@ -7,6 +7,9 @@
  * string matching. This allows for mismatches and can be more efficient when the
  * number of patterns is small relative to the total number of k-mers in the reads.
  * 
+ * Uses edlib (https://github.com/Martinsos/edlib) by Martin Šošić for fast edit 
+ * distance calculation via Myers' bit-vector algorithm.
+ * 
  * Usage: ed-vaf-counter [options] -p <patterns.txt> -o <output.vaf> <reads.fq> [...]
  */
 

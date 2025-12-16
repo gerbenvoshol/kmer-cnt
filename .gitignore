@@ -11,6 +11,7 @@ kc-cpp2
 yak-count
 snp-pattern-gen
 vaf-counter
+ed-vaf-counter
 correlation-matrix
 match-classifier
 bam-vaf-counter
