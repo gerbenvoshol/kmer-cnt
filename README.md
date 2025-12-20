@@ -83,25 +83,24 @@ For situations where approximate matching is desired, or when the pattern set is
 - When you have a very small pattern set and large FASTQ files
 - For exploratory analysis with approximate matching
 
-#### 2b. Alternative: Count k-mers in BAM files
+#### 2b. Alternative: Count variants in BAM files
 
 For aligned sequencing data (BAM/SAM/CRAM files):
 
 ```sh
-./bam-vaf-counter -k 21 -t 4 -p patterns.txt -o sample1.vaf sample1.bam
+./bam-vaf-counter -t 4 -p patterns.txt -o sample1.vaf sample1.bam
 ```
 
 **Input:**
 - `-p` Pattern file from step 1
-- `-k` K-mer length (must match pattern generation)
 - `-t` Number of threads (default: 4)
 - One or more BAM/SAM/CRAM files
 
 **Output:** VAF file with variant allele frequencies and depth information
 
-**Note:** This program uses htslib to read BAM files and extracts k-mers from aligned reads, providing the same output format as vaf-counter.
+**Note:** This program uses htslib to read BAM files and directly counts ref/alt bases at SNP positions without k-mer extraction, making it significantly faster than the k-mer-based approach.
 
-**Performance Optimization:** bam-vaf-counter uses indexed BAM access (requires .bai index file) to fetch only reads overlapping SNP positions, dramatically improving performance compared to sequential processing of all reads. Regions are automatically merged to minimize redundant fetching. If no BAM index is available, the program falls back to sequential processing with a warning.
+**Performance Optimization:** bam-vaf-counter uses indexed BAM access (requires .bai index file) to fetch only reads overlapping SNP positions, dramatically improving performance compared to sequential processing of all reads. The program directly examines bases at SNP positions using CIGAR string parsing, eliminating the overhead of k-mer extraction. Regions are automatically merged to minimize redundant fetching. If no BAM index is available, the program falls back to sequential processing with a warning.
 
 #### 2c. Alternative: Generate VAF from VCF files
 
@@ -194,9 +193,9 @@ make snp-pattern-gen vaf-counter ed-vaf-counter bam-vaf-counter vcf-vaf-counter 
 ./ed-vaf-counter -p patterns.txt -e 1 -o sample1.vaf sample1_R1.fq.gz sample1_R2.fq.gz
 ./ed-vaf-counter -p patterns.txt -e 1 -o sample2.vaf sample2_R1.fq.gz sample2_R2.fq.gz
 
-# Or use BAM files instead
-./bam-vaf-counter -k 21 -p patterns.txt -o sample1.vaf sample1.bam
-./bam-vaf-counter -k 21 -p patterns.txt -o sample2.vaf sample2.bam
+# Or use BAM files instead (position-based, no k-mer needed)
+./bam-vaf-counter -p patterns.txt -o sample1.vaf sample1.bam
+./bam-vaf-counter -p patterns.txt -o sample2.vaf sample2.bam
 
 # Or use VCF files directly
 ./vcf-vaf-counter -p patterns.txt -v sample1.vcf.gz -o sample1.vaf -s 0
