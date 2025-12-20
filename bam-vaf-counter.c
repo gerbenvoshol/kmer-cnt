@@ -75,7 +75,8 @@ pattern_db_t *load_patterns(const char *fn)
 	}
 	
 	// Pattern file format: chr start end rsid ref alt ref_kmer alt_kmer
-	// We only need chr, position, rsid, ref, alt
+	// BED format: start is 0-based, end is 1-based (half-open interval [start, end))
+	// The SNP position is at the 0-based 'start' coordinate
 	while (fscanf(fp, "%255s%d%d%255s %c %c%127s%127s", 
 	              pat.chr, &start, &end, pat.rsid, 
 	              &pat.ref, &pat.alt, ref_kmer, alt_kmer) == 8) {
@@ -275,6 +276,7 @@ static inline void count_base_at_position(bam1_t *b, int ref_pos, char ref_base,
 			// Deletion/skip: only ref advances
 			if (ref_pos >= current_ref_pos && ref_pos < current_ref_pos + len) {
 				// Position is in deletion, no base to count
+				// Continue to next SNP position rather than returning
 				return;
 			}
 			current_ref_pos += len;
@@ -297,23 +299,21 @@ static void worker_check_positions(void *data, long i, int tid)
 	int ref_start = b->core.pos;
 	int ref_end = bam_endpos(b);
 	
-	// Check all SNPs that this read overlaps
-	khint_t k;
-	for (k = 0; k < kh_end(s->p->snp_map); ++k) {
-		if (!kh_exist(s->p->snp_map, k)) continue;
+	// Check only SNPs on the same chromosome and within read boundaries
+	// This is more efficient than checking all SNPs
+	int j;
+	for (j = 0; j < s->p->db->n; ++j) {
+		pattern_t *pat = &s->p->db->a[j];
 		
-		uint64_t key = kh_key(s->p->snp_map, k);
-		int snp_tid = (int)(key >> 32);
-		int snp_pos = (int)(key & 0xFFFFFFFF);
+		// Skip SNPs on different chromosomes
+		if (pat->tid != ref_tid) continue;
 		
-		// Check if this read overlaps the SNP
-		if (snp_tid == ref_tid && snp_pos >= ref_start && snp_pos < ref_end) {
-			int pat_idx = kh_val(s->p->snp_map, k);
-			pattern_t *pat = &s->p->db->a[pat_idx];
-			
-			count_base_at_position(b, snp_pos, pat->ref, pat->alt, 
-			                       &pat->ref_count, &pat->alt_count);
-		}
+		// Skip SNPs outside read boundaries
+		if (pat->pos < ref_start || pat->pos >= ref_end) continue;
+		
+		// This SNP overlaps the read, check the base
+		count_base_at_position(b, pat->pos, pat->ref, pat->alt, 
+		                       &pat->ref_count, &pat->alt_count);
 	}
 }
 
